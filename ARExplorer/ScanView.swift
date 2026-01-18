@@ -32,6 +32,11 @@ struct ScanView: View {
             GridOverlay()
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
+            
+            // Crosshair centered on screen (only when recording)
+            if isRecording {
+                crosshair
+            }
 
             VStack(spacing: 16) {
                 topBar
@@ -47,16 +52,7 @@ struct ScanView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
-                Spacer()
-
-                // Crosshair (only when recording)
-                if isRecording {
-                    crosshair
-                }
-
                 scanFrame
-
-                Spacer()
 
                 bottomControls
             }
@@ -332,12 +328,7 @@ struct ScanView: View {
     private var scanFrame: some View {
         RoundedRectangle(cornerRadius: 22)
             .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: [12, 10]))
-            .frame(height: 240)
-            .overlay(
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(Color.white.opacity(0.8))
-            )
+            .frame(maxHeight: .infinity)
     }
 
     private var modePicker: some View {
@@ -547,8 +538,10 @@ struct ScanView: View {
                     .font(.system(size: 14))
                     .foregroundColor(AppTheme.ink.opacity(0.7))
                 
-                TextField("What's on your mind?", text: $noteText, axis: .vertical)
+                TextField("", text: $noteText, prompt: Text("What's on your mind?").foregroundColor(.black.opacity(0.5)), axis: .vertical)
                     .font(.system(size: 16))
+                    .foregroundColor(.black)
+                    .tint(.black)
                     .padding(16)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
