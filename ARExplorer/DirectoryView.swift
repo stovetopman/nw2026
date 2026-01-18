@@ -112,9 +112,11 @@ struct DirectoryView: View {
                 Button {
                     onOpenMemory(item)
                 } label: {
-                    MemoryCardView(item: item, onGoToFile: {
-                        openInFilesApp(item: item)
-                    })
+                    MemoryCardView(
+                        item: item,
+                        onGoToFile: { openInFilesApp(item: item) },
+                        onDelete: { store.deleteMemory(item) }
+                    )
                 }
                 .buttonStyle(.plain)
             }

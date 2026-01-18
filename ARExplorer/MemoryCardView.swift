@@ -4,6 +4,8 @@ struct MemoryCardView: View {
     let item: MemoryItem
     var isCompact: Bool = false
     var onGoToFile: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
+    var onShare: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -40,31 +42,6 @@ struct MemoryCardView: View {
             }
             .font(AppTheme.bodyFont(size: 12))
             .foregroundColor(AppTheme.softInk)
-            
-            // Go to File button
-            if let onGoToFile = onGoToFile {
-                Button(action: onGoToFile) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 12, weight: .bold))
-                        Text("Go to File")
-                            .font(AppTheme.titleFont(size: 12))
-                    }
-                    .foregroundColor(AppTheme.ink)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color(red: 0.95, green: 0.97, blue: 1.0))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(AppTheme.ink, lineWidth: 1.5)
-                            )
-                    )
-                }
-                .buttonStyle(.plain)
-            }
         }
         .padding(12)
         .background(
@@ -76,6 +53,32 @@ struct MemoryCardView: View {
                 .stroke(AppTheme.ink, lineWidth: 2)
         )
         .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 6)
+        .contextMenu {
+            if let onShare = onShare {
+                Button {
+                    onShare()
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
+            
+            if let onGoToFile = onGoToFile {
+                Button {
+                    onGoToFile()
+                } label: {
+                    Label("Go to File", systemImage: "folder")
+                }
+            }
+            
+            if let onDelete = onDelete {
+                Divider()
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("Delete Memory", systemImage: "trash")
+                }
+            }
+        }
     }
 
     private var placeholderImage: some View {

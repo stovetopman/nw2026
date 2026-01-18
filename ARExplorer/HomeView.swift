@@ -175,8 +175,12 @@ struct HomeView: View {
                             Button {
                                 onOpenMemory(item)
                             } label: {
-                                MemoryCardView(item: item, isCompact: true)
-                                    .frame(width: 200)
+                                MemoryCardView(
+                                    item: item,
+                                    isCompact: true,
+                                    onDelete: { store.deleteMemory(item) }
+                                )
+                                .frame(width: 200)
                             }
                             .buttonStyle(.plain)
                         }
