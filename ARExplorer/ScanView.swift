@@ -10,6 +10,8 @@ struct ScanView: View {
     @State private var scanMode: ScanMode = .point
     @State private var pointCount: Int = 0
     @State private var scanDistance: Float = 1.0
+    @State private var showDistanceSlider = false
+    @State private var userSetDistance: Float = 1.0
 
     var body: some View {
         ZStack {
@@ -23,6 +25,11 @@ struct ScanView: View {
             VStack(spacing: 16) {
                 topBar
                 statsRow
+                
+                if showDistanceSlider {
+                    distanceSlider
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
 
                 Spacer()
 
@@ -42,11 +49,13 @@ struct ScanView: View {
                 startScanOnAppear = false
                 startScan()
             }
+            // Set initial distance on recorder
+            NotificationCenter.default.post(name: .updateScanDistance, object: userSetDistance)
         }
         .onReceive(NotificationCenter.default.publisher(for: .scanStatsUpdated)) { notification in
             if let stats = notification.object as? ScanStats {
                 pointCount = stats.pointCount
-                scanDistance = stats.maxDistance
+                // Don't overwrite user's distance setting
             }
         }
     }
@@ -112,7 +121,79 @@ struct ScanView: View {
         HStack {
             StatPill(icon: "cube", text: formattedPointCount)
             Spacer()
-            StatPill(icon: "ruler", text: String(format: "%.1fm DIST", scanDistance))
+            Button(action: { withAnimation(.spring(response: 0.3)) { showDistanceSlider.toggle() } }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "ruler")
+                        .font(.system(size: 12, weight: .bold))
+                    Text(String(format: "%.1fm", userSetDistance))
+                        .font(AppTheme.titleFont(size: 12))
+                    Image(systemName: showDistanceSlider ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundColor(AppTheme.ink)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.9))
+                        .overlay(
+                            Capsule()
+                                .stroke(AppTheme.ink, lineWidth: 2)
+                        )
+                )
+            }
+        }
+    }
+    
+    private var distanceSlider: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("SCAN RANGE")
+                    .font(AppTheme.titleFont(size: 10))
+                    .foregroundColor(AppTheme.ink.opacity(0.7))
+                Spacer()
+                Text(distanceLabel)
+                    .font(AppTheme.titleFont(size: 10))
+                    .foregroundColor(AppTheme.ink)
+            }
+            
+            HStack(spacing: 12) {
+                Text("0.5m")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(AppTheme.ink.opacity(0.5))
+                
+                Slider(value: $userSetDistance, in: 0.5...5.0, step: 0.5)
+                    .tint(AppTheme.accentBlue)
+                    .onChange(of: userSetDistance) { newValue in
+                        NotificationCenter.default.post(name: .updateScanDistance, object: newValue)
+                    }
+                
+                Text("5m")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(AppTheme.ink.opacity(0.5))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.9))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(AppTheme.ink, lineWidth: 2)
+                )
+        )
+    }
+    
+    private var distanceLabel: String {
+        if userSetDistance <= 1.0 {
+            return "CLOSE-UP"
+        } else if userSetDistance <= 2.0 {
+            return "NEAR"
+        } else if userSetDistance <= 3.5 {
+            return "MEDIUM"
+        } else {
+            return "FAR"
         }
     }
     

@@ -8,6 +8,7 @@ extension Notification.Name {
     static let scanSaved = Notification.Name("scanSaved")
     static let viewerRecenter = Notification.Name("viewerRecenter")
     static let scanStatsUpdated = Notification.Name("scanStatsUpdated")
+    static let updateScanDistance = Notification.Name("updateScanDistance")
 }
 
 /// Stats payload for scan updates

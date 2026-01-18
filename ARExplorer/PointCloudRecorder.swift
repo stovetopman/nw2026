@@ -16,7 +16,8 @@ class PointCloudRecorder {
     var onNewPoints: (([ScannedPoint]) -> Void)?
     
     // Maximum distance from camera to capture points (in meters)
-    private let maxDistance: Float = 1.0
+    // LiDAR typically works up to ~5m, but accuracy decreases with distance
+    private var maxDistance: Float = 1.0
     private let minDistance: Float = 0.1
     
     // Grid scale for deduplication (higher = finer detail, more points)
@@ -29,6 +30,29 @@ class PointCloudRecorder {
         let x: Int32
         let y: Int32
         let z: Int32
+    }
+    
+    init() {
+        // Listen for distance updates from UI
+        NotificationCenter.default.addObserver(
+            forName: .updateScanDistance,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            if let distance = notification.object as? Float {
+                self?.queue.async {
+                    self?.maxDistance = distance
+                }
+            }
+        }
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    var currentMaxDistance: Float {
+        return maxDistance
     }
     
     var pointCount: Int {
