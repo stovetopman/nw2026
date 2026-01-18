@@ -97,14 +97,13 @@ struct MemoryViewerView: View {
                         }
                 )
             
-            // Inline input appears after placing
+            // Inline input appears after placing - fixed at bottom above keyboard
             if pinPlaced {
                 InlineNoteInput(
                     text: $newNoteText,
                     onSave: saveNewNote,
                     onCancel: cancelPlacement
                 )
-                .position(x: pinPosition.x, y: min(pinPosition.y + 100, UIScreen.main.bounds.height - 200))
             }
             
             // Top bar with cancel and confirm buttons

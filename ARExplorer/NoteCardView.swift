@@ -1,4 +1,5 @@
 import SwiftUI
+import simd
 
 /// Card displaying a spatial note's content with edit/delete actions
 struct NoteCardView: View {
