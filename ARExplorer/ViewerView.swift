@@ -5,15 +5,51 @@ import simd
 
 struct ViewerView: View {
     let plyURL: URL
+    @State private var isLoading = true
+    @State private var loadingProgress: String = "Reading file..."
 
     var body: some View {
-        ViewerPointCloudContainer(plyURL: plyURL)
-            .ignoresSafeArea()
+        ZStack {
+            ViewerPointCloudContainer(plyURL: plyURL, isLoading: $isLoading, loadingProgress: $loadingProgress)
+                .ignoresSafeArea()
+            
+            if isLoading {
+                loadingOverlay
+            }
+        }
+    }
+    
+    private var loadingOverlay: some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.5)
+            
+            Text(loadingProgress)
+                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+            
+            Text("PREPARING MEMORY")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.white.opacity(0.5))
+                .tracking(2)
+        }
+        .padding(40)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.black.opacity(0.7))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
 }
 
 struct ViewerPointCloudContainer: UIViewRepresentable {
     let plyURL: URL
+    @Binding var isLoading: Bool
+    @Binding var loadingProgress: String
 
     final class Coordinator {
         weak var scnView: SCNView?
@@ -64,8 +100,22 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
+                DispatchQueue.main.async {
+                    self.loadingProgress = "Reading PLY file..."
+                }
+                
                 let points = try PLYPointCloud.read(from: plyURL)
+                
+                DispatchQueue.main.async {
+                    self.loadingProgress = "Processing \(formatPointCount(points.count)) points..."
+                }
+                
                 let node = makePointCloudNode(from: points)
+                
+                DispatchQueue.main.async {
+                    self.loadingProgress = "Rendering..."
+                }
+                
                 DispatchQueue.main.async {
                     scene.rootNode.addChildNode(node)
                     context.coordinator.pointNode = node
@@ -75,9 +125,18 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                         let distance = Float(boundingSphere.radius) * 2.5
                         cameraNode.position = SCNVector3(0, 0, distance)
                     }
+                    
+                    // Hide loading indicator
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        self.isLoading = false
+                    }
                 }
             } catch {
                 print("Failed to load PLY:", error)
+                DispatchQueue.main.async {
+                    self.loadingProgress = "Failed to load"
+                    self.isLoading = false
+                }
             }
         }
 
@@ -178,5 +237,15 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             cameraNode.position = SCNVector3(0, 0, 3)
         }
         cameraNode.eulerAngles = SCNVector3Zero
+    }
+}
+
+private func formatPointCount(_ count: Int) -> String {
+    if count >= 1_000_000 {
+        return String(format: "%.1fM", Double(count) / 1_000_000)
+    } else if count >= 1_000 {
+        return String(format: "%.0fK", Double(count) / 1_000)
+    } else {
+        return "\(count)"
     }
 }
