@@ -52,7 +52,25 @@ class PointCloudRecorder {
             
             // 2. Prepare to read data
             let cameraTransform = frame.camera.transform
+            
+            // Use the depth map's own intrinsics (not the color camera intrinsics)
+            // The depth map has different resolution than the color image
+            let depthWidth = CVPixelBufferGetWidth(depthMap)
+            let depthHeight = CVPixelBufferGetHeight(depthMap)
+            
+            // Scale intrinsics from color image resolution to depth map resolution
+            let colorWidth = CVPixelBufferGetWidth(colorImage)
+            let colorHeight = CVPixelBufferGetHeight(colorImage)
+            
+            // ARKit intrinsics are for the color image, we need to scale them for depth
+            let scaleX = Float(depthWidth) / Float(colorWidth)
+            let scaleY = Float(depthHeight) / Float(colorHeight)
+            
             let intrinsics = frame.camera.intrinsics
+            let fx = intrinsics.columns.0.x * scaleX  // focal length x (scaled)
+            let fy = intrinsics.columns.1.y * scaleY  // focal length y (scaled)
+            let cx = intrinsics.columns.2.x * scaleX  // principal point x (scaled)
+            let cy = intrinsics.columns.2.y * scaleY  // principal point y (scaled)
             
             CVPixelBufferLockBaseAddress(depthMap, .readOnly)
             CVPixelBufferLockBaseAddress(colorImage, .readOnly)
@@ -60,11 +78,6 @@ class PointCloudRecorder {
                 CVPixelBufferUnlockBaseAddress(depthMap, .readOnly)
                 CVPixelBufferUnlockBaseAddress(colorImage, .readOnly)
             }
-            
-            let depthWidth = CVPixelBufferGetWidth(depthMap)
-            let depthHeight = CVPixelBufferGetHeight(depthMap)
-            let colorWidth = CVPixelBufferGetWidth(colorImage)
-            let colorHeight = CVPixelBufferGetHeight(colorImage)
             
             let depthBytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
             let depthBase = CVPixelBufferGetBaseAddress(depthMap)!
@@ -75,9 +88,9 @@ class PointCloudRecorder {
             let cbcrPlane = CVPixelBufferGetBaseAddressOfPlane(colorImage, 1)!
             let cbcrBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(colorImage, 1)
             
-            // 3. Scale factor (Depth map is smaller than Color image)
-            let scaleX = Float(colorWidth) / Float(depthWidth)
-            let scaleY = Float(colorHeight) / Float(depthHeight)
+            // 3. Scale factor for color mapping (Depth map is smaller than Color image)
+            let colorScaleX = Float(colorWidth) / Float(depthWidth)
+            let colorScaleY = Float(colorHeight) / Float(depthHeight)
             
             let beforeCount = self.points.count
             
@@ -95,11 +108,7 @@ class PointCloudRecorder {
                     if depthInMeters.isNaN || depthInMeters.isInfinite { continue }
                     
                     // --- MATH: Un-project 2D pixel to 3D Local Point ---
-                    let fx = intrinsics.columns.0.x  // focal length x
-                    let fy = intrinsics.columns.1.y  // focal length y
-                    let cx = intrinsics.columns.2.x  // principal point x
-                    let cy = intrinsics.columns.2.y  // principal point y
-                    
+                    // Using scaled intrinsics (fx, fy, cx, cy defined above)
                     let xRw = (Float(x) - cx) * depthInMeters / fx
                     let yRw = (Float(y) - cy) * depthInMeters / fy
                     let zRw = -depthInMeters  // Camera looks down -Z axis
@@ -118,8 +127,8 @@ class PointCloudRecorder {
                     self.pointKeys.insert(key)
                     
                     // --- COLOR: Map to RGB from YCbCr ---
-                    let colorX = min(Int(Float(x) * scaleX), colorWidth - 1)
-                    let colorY = min(Int(Float(y) * scaleY), colorHeight - 1)
+                    let colorX = min(Int(Float(x) * colorScaleX), colorWidth - 1)
+                    let colorY = min(Int(Float(y) * colorScaleY), colorHeight - 1)
                     
                     // Read Y (luminance)
                     let yIndex = colorY * yBytesPerRow + colorX
