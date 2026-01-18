@@ -4,6 +4,8 @@ Inspired by the idea of preserving real-world spaces as digital memories, this p
 
 By combining AR, depth sensing, and intuitive UI design, the project demonstrates a lightweight alternative to full 3D reconstruction, focused on accessibility, exploration, and annotation.
 
+![Logo](memiscapes-logo.png)
+
 ---
 
 ## How It Works
