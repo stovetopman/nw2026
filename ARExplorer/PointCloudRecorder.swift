@@ -1,6 +1,33 @@
 import ARKit
 import Foundation
 
+/// Confidence threshold for filtering depth points
+enum ConfidenceThreshold: Int, CaseIterable {
+    case low = 0      // Include all points (low, medium, high)
+    case medium = 1   // Include medium and high confidence only
+    case high = 2     // Include high confidence only
+    
+    var title: String {
+        switch self {
+        case .low: return "ALL"
+        case .medium: return "MEDIUM+"
+        case .high: return "HIGH"
+        }
+    }
+    
+    /// Returns true if the given confidence level should be included
+    func includes(_ level: ARConfidenceLevel) -> Bool {
+        switch self {
+        case .low:
+            return true  // Include all
+        case .medium:
+            return level == .medium || level == .high
+        case .high:
+            return level == .high
+        }
+    }
+}
+
 class PointCloudRecorder {
     // We store points as simple strings for the PLY file (X Y Z R G B)
     private var points: [String] = []
@@ -19,6 +46,9 @@ class PointCloudRecorder {
     // LiDAR typically works up to ~5m, but accuracy decreases with distance
     private var maxDistance: Float = 1.0
     private let minDistance: Float = 0.1
+    
+    // Confidence threshold for filtering points
+    private var confidenceThreshold: ConfidenceThreshold = .medium
     
     // Grid scale for deduplication (higher = finer detail, more points)
     // 500 means points within 2mm are considered duplicates
@@ -45,6 +75,19 @@ class PointCloudRecorder {
                 }
             }
         }
+        
+        // Listen for confidence threshold updates from UI
+        NotificationCenter.default.addObserver(
+            forName: .updateConfidenceThreshold,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            if let threshold = notification.object as? ConfidenceThreshold {
+                self?.queue.async {
+                    self?.confidenceThreshold = threshold
+                }
+            }
+        }
     }
     
     deinit {
@@ -53,6 +96,10 @@ class PointCloudRecorder {
     
     var currentMaxDistance: Float {
         return maxDistance
+    }
+    
+    var currentConfidenceThreshold: ConfidenceThreshold {
+        return confidenceThreshold
     }
     
     var pointCount: Int {
@@ -77,7 +124,8 @@ class PointCloudRecorder {
             
             // 1. Get the data - need sceneDepth for LiDAR depth map
             guard let sceneDepth = frame.sceneDepth,
-                  let colorImage = frame.capturedImage as CVPixelBuffer? else { return }
+                  let colorImage = frame.capturedImage as CVPixelBuffer?,
+                  let confidenceMap = sceneDepth.confidenceMap else { return }
             
             let depthMap = sceneDepth.depthMap
             
@@ -104,14 +152,20 @@ class PointCloudRecorder {
             let cy = intrinsics.columns.2.y * scaleY  // principal point y (scaled)
             
             CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+            CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
             CVPixelBufferLockBaseAddress(colorImage, .readOnly)
             defer {
                 CVPixelBufferUnlockBaseAddress(depthMap, .readOnly)
+                CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly)
                 CVPixelBufferUnlockBaseAddress(colorImage, .readOnly)
             }
             
             let depthBytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
             let depthBase = CVPixelBufferGetBaseAddress(depthMap)!
+            
+            // Read confidence map
+            let confidenceBytesPerRow = CVPixelBufferGetBytesPerRow(confidenceMap)
+            let confidenceBase = CVPixelBufferGetBaseAddress(confidenceMap)!
             
             // For YCbCr color buffer (iPhone camera format)
             let yPlane = CVPixelBufferGetBaseAddressOfPlane(colorImage, 0)!
@@ -135,6 +189,27 @@ class PointCloudRecorder {
                 // Filter: Only capture points within our distance range
                 if depthInMeters < self.minDistance || depthInMeters > self.maxDistance { return nil }
                 if depthInMeters.isNaN || depthInMeters.isInfinite { return nil }
+                
+                // Read confidence value (UInt8, maps to ARConfidenceLevel)
+                let confidenceOffset = y * confidenceBytesPerRow + x * MemoryLayout<UInt8>.size
+                let confidenceValue = confidenceBase.load(fromByteOffset: confidenceOffset, as: UInt8.self)
+                
+                // Convert UInt8 to ARConfidenceLevel
+                // ARKit uses: 0 = .low, 1 = .medium, 2 = .high
+                let confidenceLevel: ARConfidenceLevel
+                switch confidenceValue {
+                case 0:
+                    confidenceLevel = .low
+                case 1:
+                    confidenceLevel = .medium
+                case 2:
+                    confidenceLevel = .high
+                default:
+                    confidenceLevel = .low  // Default to low for unknown values
+                }
+                
+                // Filter by confidence threshold
+                if !self.confidenceThreshold.includes(confidenceLevel) { return nil }
                 
                 // --- MATH: Un-project 2D pixel to 3D Local Point ---
                 let xRw = (Float(x) - cx) * depthInMeters / fx

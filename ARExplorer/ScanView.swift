@@ -12,6 +12,8 @@ struct ScanView: View {
     @State private var scanDistance: Float = 1.0
     @State private var showDistanceSlider = false
     @State private var userSetDistance: Float = 1.0
+    @State private var confidenceThreshold: ConfidenceThreshold = .medium
+    @State private var showConfidencePicker = false
 
     var body: some View {
         ZStack {
@@ -28,6 +30,11 @@ struct ScanView: View {
                 
                 if showDistanceSlider {
                     distanceSlider
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                
+                if showConfidencePicker {
+                    confidencePicker
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
@@ -51,6 +58,8 @@ struct ScanView: View {
             }
             // Set initial distance on recorder
             NotificationCenter.default.post(name: .updateScanDistance, object: userSetDistance)
+            // Set initial confidence threshold on recorder
+            NotificationCenter.default.post(name: .updateConfidenceThreshold, object: confidenceThreshold)
         }
         .onReceive(NotificationCenter.default.publisher(for: .scanStatsUpdated)) { notification in
             if let stats = notification.object as? ScanStats {
@@ -121,13 +130,45 @@ struct ScanView: View {
         HStack {
             StatPill(icon: "cube", text: formattedPointCount)
             Spacer()
-            Button(action: { withAnimation(.spring(response: 0.3)) { showDistanceSlider.toggle() } }) {
+            Button(action: { 
+                withAnimation(.spring(response: 0.3)) { 
+                    showDistanceSlider.toggle()
+                    if showDistanceSlider { showConfidencePicker = false }
+                } 
+            }) {
                 HStack(spacing: 6) {
                     Image(systemName: "ruler")
                         .font(.system(size: 12, weight: .bold))
                     Text(String(format: "%.1fm", userSetDistance))
                         .font(AppTheme.titleFont(size: 12))
                     Image(systemName: showDistanceSlider ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundColor(AppTheme.ink)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.9))
+                        .overlay(
+                            Capsule()
+                                .stroke(AppTheme.ink, lineWidth: 2)
+                        )
+                )
+            }
+            
+            Button(action: { 
+                withAnimation(.spring(response: 0.3)) { 
+                    showConfidencePicker.toggle()
+                    if showConfidencePicker { showDistanceSlider = false }
+                } 
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.shield")
+                        .font(.system(size: 12, weight: .bold))
+                    Text(confidenceThreshold.title)
+                        .font(AppTheme.titleFont(size: 12))
+                    Image(systemName: showConfidencePicker ? "chevron.up" : "chevron.down")
                         .font(.system(size: 10, weight: .bold))
                 }
                 .foregroundColor(AppTheme.ink)
@@ -195,6 +236,50 @@ struct ScanView: View {
         } else {
             return "FAR"
         }
+    }
+    
+    private var confidencePicker: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("CONFIDENCE FILTER")
+                    .font(AppTheme.titleFont(size: 10))
+                    .foregroundColor(AppTheme.ink.opacity(0.7))
+                Spacer()
+            }
+            
+            HStack(spacing: 12) {
+                ForEach(ConfidenceThreshold.allCases, id: \.self) { threshold in
+                    Button(action: {
+                        confidenceThreshold = threshold
+                        NotificationCenter.default.post(name: .updateConfidenceThreshold, object: threshold)
+                    }) {
+                        Text(threshold.title)
+                            .font(AppTheme.titleFont(size: 11))
+                            .foregroundColor(confidenceThreshold == threshold ? .white : AppTheme.ink)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule()
+                                    .fill(confidenceThreshold == threshold ? AppTheme.ink : Color.white.opacity(0.7))
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(AppTheme.ink, lineWidth: confidenceThreshold == threshold ? 0 : 2)
+                                    )
+                            )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.9))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(AppTheme.ink, lineWidth: 2)
+                )
+        )
     }
     
     private var formattedPointCount: String {
