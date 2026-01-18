@@ -1,4 +1,6 @@
 import SwiftUI
+import ARKit
+import simd
 
 struct ScanView: View {
     @ObservedObject var store: MemoryStore
@@ -15,10 +17,12 @@ struct ScanView: View {
     @State private var confidenceThreshold: ConfidenceThreshold = .medium
     @State private var showConfidencePicker = false
     
-    // Post-scan note adding
-    @State private var showPostScanNote = false
-    @State private var savedPLYURL: URL? = nil
-    @State private var savedFolderURL: URL? = nil
+    // Live note adding during scan
+    @State private var showNoteInput = false
+    @State private var noteText = ""
+    @State private var pendingNotes: [SpatialNote] = []
+    @State private var currentFolderURL: URL? = nil
+    @State private var lastCameraPosition: SIMD3<Float> = SIMD3<Float>(0, 0, -1.5)
 
     var body: some View {
         ZStack {
@@ -45,6 +49,11 @@ struct ScanView: View {
 
                 Spacer()
 
+                // Crosshair (only when recording)
+                if isRecording {
+                    crosshair
+                }
+
                 scanFrame
                 modePicker
 
@@ -55,6 +64,11 @@ struct ScanView: View {
             .padding(.horizontal, 20)
             .padding(.top, 16)
             .padding(.bottom, 90)
+            
+            // Note input overlay
+            if showNoteInput {
+                noteInputOverlay
+            }
         }
         .onAppear {
             if startScanOnAppear {
@@ -69,29 +83,26 @@ struct ScanView: View {
         .onReceive(NotificationCenter.default.publisher(for: .scanStatsUpdated)) { notification in
             if let stats = notification.object as? ScanStats {
                 pointCount = stats.pointCount
-                // Don't overwrite user's distance setting
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .scanFolderCreated)) { notification in
+            // Capture the folder URL when scan starts
+            if let url = notification.object as? URL {
+                currentFolderURL = url
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .scanSaved)) { notification in
-            // When scan is saved, show the post-scan note view
+            // When scan is saved, save pending notes and refresh
             if let url = notification.object as? URL {
-                savedPLYURL = url
-                savedFolderURL = url.deletingLastPathComponent()
-                showPostScanNote = true
+                let folderURL = url.deletingLastPathComponent()
+                saveNotesToFolder(folderURL)
+                store.refresh()
             }
         }
-        .fullScreenCover(isPresented: $showPostScanNote) {
-            if let plyURL = savedPLYURL,
-               let folderURL = savedFolderURL {
-                PostScanNoteView(
-                    plyURL: plyURL,
-                    folderURL: folderURL,
-                    noteStore: NoteStore(folderURL: folderURL),
-                    onDone: {
-                        showPostScanNote = false
-                        store.refresh()
-                    }
-                )
+        .onReceive(NotificationCenter.default.publisher(for: .cameraPositionResponse)) { notification in
+            // Update last camera position when received
+            if let position = notification.object as? SIMD3<Float> {
+                lastCameraPosition = position
             }
         }
     }
@@ -364,56 +375,81 @@ struct ScanView: View {
     }
 
     private var bottomControls: some View {
-        HStack(spacing: 18) {
-            Button(action: capturePhoto) {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 18, weight: .bold))
+        VStack(spacing: 16) {
+            // Add Thought button (only when recording)
+            if isRecording {
+                Button(action: { showNoteInput = true }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.bubble.fill")
+                            .font(.system(size: 16, weight: .bold))
+                        Text("ADD THOUGHT")
+                            .font(AppTheme.titleFont(size: 14))
+                    }
                     .foregroundColor(AppTheme.ink)
-                    .frame(width: 54, height: 54)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
                     .background(
-                        Circle()
-                            .fill(Color.white.opacity(0.9))
+                        Capsule()
+                            .fill(AppTheme.accentYellow)
                             .overlay(
-                                Circle()
+                                Capsule()
                                     .stroke(AppTheme.ink, lineWidth: 2)
                             )
                     )
-            }
-
-            Button(action: toggleScan) {
-                HStack(spacing: 10) {
-                    Circle()
-                        .fill(isRecording ? Color.red : AppTheme.accentBlue)
-                        .frame(width: 12, height: 12)
-                    Text(isRecording ? "STOP SCAN" : "START SCAN")
-                        .font(AppTheme.titleFont(size: 16))
-                        .foregroundColor(.white)
                 }
-                .padding(.horizontal, 26)
-                .padding(.vertical, 16)
-                .background(
-                    Capsule()
-                        .fill(AppTheme.ink)
-                )
+                .transition(.scale.combined(with: .opacity))
             }
-
-            Button {
-                if let latest = store.memories.first {
-                    onOpenLatest(latest)
-                }
-            } label: {
-                ZStack(alignment: .topTrailing) {
-                    Circle()
-                        .fill(Color.white.opacity(0.9))
+            
+            HStack(spacing: 18) {
+                Button(action: capturePhoto) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(AppTheme.ink)
                         .frame(width: 54, height: 54)
-                        .overlay(
-                            Circle().stroke(AppTheme.ink, lineWidth: 2)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.9))
+                                .overlay(
+                                    Circle()
+                                        .stroke(AppTheme.ink, lineWidth: 2)
+                                )
                         )
-                        .overlay(
-                            Image(systemName: "photo")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundColor(AppTheme.ink)
-                        )
+                }
+
+                Button(action: toggleScan) {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(isRecording ? Color.red : AppTheme.accentBlue)
+                            .frame(width: 12, height: 12)
+                        Text(isRecording ? "STOP SCAN" : "START SCAN")
+                            .font(AppTheme.titleFont(size: 16))
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 26)
+                    .padding(.vertical, 16)
+                    .background(
+                        Capsule()
+                            .fill(AppTheme.ink)
+                    )
+                }
+
+                Button {
+                    if let latest = store.memories.first {
+                        onOpenLatest(latest)
+                    }
+                } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Circle()
+                            .fill(Color.white.opacity(0.9))
+                            .frame(width: 54, height: 54)
+                            .overlay(
+                                Circle().stroke(AppTheme.ink, lineWidth: 2)
+                            )
+                            .overlay(
+                                Image(systemName: "photo")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(AppTheme.ink)
+                            )
 
                     if store.memories.count > 0 {
                         Text("\(store.memories.count)")
@@ -429,7 +465,8 @@ struct ScanView: View {
                     }
                 }
             }
-        }
+            } // HStack
+        } // VStack
     }
 
     private func toggleScan() {
@@ -442,6 +479,7 @@ struct ScanView: View {
 
     private func startScan() {
         isRecording = true
+        pendingNotes = []
         NotificationCenter.default.post(name: .startScan, object: nil)
     }
 
@@ -452,6 +490,144 @@ struct ScanView: View {
 
     private func capturePhoto() {
         NotificationCenter.default.post(name: .capturePhoto, object: nil)
+    }
+    
+    // MARK: - Crosshair
+    
+    private var crosshair: some View {
+        ZStack {
+            // Vertical line
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: 2, height: 30)
+            
+            // Horizontal line
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: 30, height: 2)
+            
+            // Center dot
+            Circle()
+                .fill(Color.white)
+                .frame(width: 6, height: 6)
+        }
+        .shadow(color: .black.opacity(0.5), radius: 2)
+    }
+    
+    // MARK: - Note Input Overlay
+    
+    private var noteInputOverlay: some View {
+        ZStack {
+            // Background dim
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    withAnimation { showNoteInput = false }
+                }
+            
+            // Note input card
+            VStack(spacing: 20) {
+                HStack {
+                    Text("ADD THOUGHT")
+                        .font(AppTheme.titleFont(size: 18))
+                        .foregroundColor(AppTheme.ink)
+                    Spacer()
+                    Button(action: { withAnimation { showNoteInput = false } }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(AppTheme.ink)
+                            .frame(width: 32, height: 32)
+                            .background(
+                                Circle()
+                                    .fill(Color.white.opacity(0.5))
+                            )
+                    }
+                }
+                
+                Text("Note will be placed where the crosshair is pointing")
+                    .font(.system(size: 14))
+                    .foregroundColor(AppTheme.ink.opacity(0.7))
+                
+                TextField("What's on your mind?", text: $noteText, axis: .vertical)
+                    .font(.system(size: 16))
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(AppTheme.ink, lineWidth: 2)
+                            )
+                    )
+                    .lineLimit(3...6)
+                
+                Button(action: addNote) {
+                    Text("SAVE THOUGHT")
+                        .font(AppTheme.titleFont(size: 16))
+                        .foregroundColor(AppTheme.ink)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(AppTheme.accentYellow)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(AppTheme.ink, lineWidth: 2)
+                                )
+                        )
+                }
+                .disabled(noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1.0)
+            }
+            .padding(24)
+            .background(
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(AppTheme.accentYellow.opacity(0.95))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24)
+                            .stroke(AppTheme.ink, lineWidth: 2)
+                    )
+            )
+            .padding(.horizontal, 30)
+        }
+    }
+    
+    // MARK: - Note Actions
+    
+    private func addNote() {
+        guard !noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        
+        // Request the current camera position from ARViewContainer
+        NotificationCenter.default.post(name: .requestCameraPosition, object: nil)
+        
+        // Small delay to allow the position response to arrive
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            let note = SpatialNote(
+                text: noteText.trimmingCharacters(in: .whitespacesAndNewlines),
+                author: "me",
+                position: lastCameraPosition
+            )
+            pendingNotes.append(note)
+            
+            withAnimation {
+                noteText = ""
+                showNoteInput = false
+            }
+            
+            print("✅ Added note at position: \(lastCameraPosition)")
+        }
+    }
+    
+    private func saveNotesToFolder(_ folderURL: URL) {
+        guard !pendingNotes.isEmpty else { return }
+        
+        let noteStore = NoteStore(folderURL: folderURL)
+        for note in pendingNotes {
+            noteStore.add(note)
+        }
+        let count = pendingNotes.count
+        pendingNotes = []
+        print("✅ Saved \(count) notes to \(folderURL.lastPathComponent)")
     }
 }
 

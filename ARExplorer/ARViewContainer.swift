@@ -37,6 +37,47 @@ struct ARViewContainer: UIViewRepresentable {
             
             print("✅ Point cloud visualizer initialized")
         }
+        
+        // MARK: - Crosshair Position for Notes
+        
+        /// Get the world position where the crosshair (screen center) is pointing
+        func getCrosshairWorldPosition() -> SIMD3<Float>? {
+            guard let arView = arView,
+                  let frame = arView.session.currentFrame else { return nil }
+            
+            let camera = frame.camera
+            let cameraTransform = camera.transform
+            
+            // Get camera position and forward direction
+            let cameraPosition = SIMD3<Float>(
+                cameraTransform.columns.3.x,
+                cameraTransform.columns.3.y,
+                cameraTransform.columns.3.z
+            )
+            
+            // Camera forward is -Z in camera space
+            let forward = SIMD3<Float>(
+                -cameraTransform.columns.2.x,
+                -cameraTransform.columns.2.y,
+                -cameraTransform.columns.2.z
+            )
+            
+            // Try to raycast against real-world surfaces first
+            let screenCenter = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+            
+            // Use ARKit raycast for real-world surfaces
+            if let query = arView.makeRaycastQuery(from: screenCenter, allowing: .estimatedPlane, alignment: .any) {
+                let results = arView.session.raycast(query)
+                if let firstResult = results.first {
+                    let position = firstResult.worldTransform.columns.3
+                    return SIMD3<Float>(position.x, position.y, position.z)
+                }
+            }
+            
+            // Fallback: place at fixed distance in front of camera
+            let defaultDistance: Float = 1.5
+            return cameraPosition + forward * defaultDistance
+        }
 
         // MARK: - ARSessionDelegate
 
@@ -75,6 +116,9 @@ struct ARViewContainer: UIViewRepresentable {
             do {
                 currentSpaceFolder = try ScanStorage.makeNewSpaceFolder()
                 print("✅ Created space folder: \(currentSpaceFolder!.path)")
+                
+                // Notify ScanView of the folder URL
+                NotificationCenter.default.post(name: .scanFolderCreated, object: currentSpaceFolder)
             } catch {
                 print("❌ Failed to create space folder: \(error)")
             }
@@ -187,6 +231,11 @@ struct ARViewContainer: UIViewRepresentable {
         }
         NotificationCenter.default.addObserver(forName: .startScan, object: nil, queue: .main) { _ in
             context.coordinator.clearMap()
+        }
+        NotificationCenter.default.addObserver(forName: .requestCameraPosition, object: nil, queue: .main) { _ in
+            if let position = context.coordinator.getCrosshairWorldPosition() {
+                NotificationCenter.default.post(name: .cameraPositionResponse, object: position)
+            }
         }
 
         return arView

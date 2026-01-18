@@ -294,7 +294,7 @@ struct MemoryViewerView: View {
                                 Circle()
                                     .fill(Color.white.opacity(0.9))
                                     .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
-                            )
+                        )
                     }
 
                     if !noteStore.notes.isEmpty {
@@ -313,6 +313,8 @@ struct MemoryViewerView: View {
                                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.ink, lineWidth: 2))
                         )
                     }
+
+                    viewModeIndicator
                 }
 
                 Spacer()
@@ -382,6 +384,23 @@ struct MemoryViewerView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 90)
         }
+    }
+
+    private var viewModeIndicator: some View {
+        HStack(spacing: 6) {
+            Image(systemName: viewerCoordinator.currentViewMode.icon)
+                .font(.system(size: 10, weight: .bold))
+            Text(viewerCoordinator.currentViewMode.rawValue.uppercased())
+                .font(AppTheme.titleFont(size: 11))
+        }
+        .foregroundColor(AppTheme.ink)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.9))
+                .overlay(Capsule().stroke(AppTheme.ink, lineWidth: 2))
+        )
     }
     
     // MARK: - Actions
