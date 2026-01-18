@@ -165,17 +165,37 @@ struct MemoryViewerView: View {
     }
     
     private func placePin() {
-        if let scnView = viewerCoordinator.scnView {
-            let hitPoint = scnView.unprojectPoint(SCNVector3(
+        if let scnView = viewerCoordinator.scnView,
+           let camera = scnView.pointOfView {
+            // Get near and far points on the ray from screen position
+            let nearPoint = scnView.unprojectPoint(SCNVector3(
                 Float(pinPosition.x),
                 Float(pinPosition.y),
-                0.5
+                0.0  // Near plane
             ))
-            placedWorldPosition = SIMD3<Float>(
-                Float(hitPoint.x),
-                Float(hitPoint.y),
-                Float(hitPoint.z)
-            ) + viewerCoordinator.pointCloudCenter
+            let farPoint = scnView.unprojectPoint(SCNVector3(
+                Float(pinPosition.x),
+                Float(pinPosition.y),
+                1.0  // Far plane
+            ))
+            
+            // Calculate direction and place note at a fixed distance from camera
+            let direction = SIMD3<Float>(
+                farPoint.x - nearPoint.x,
+                farPoint.y - nearPoint.y,
+                farPoint.z - nearPoint.z
+            )
+            let normalizedDir = simd_normalize(direction)
+            
+            // Place the note 1.5 units from camera along the ray
+            let distance: Float = 1.5
+            let cameraPos = camera.worldPosition
+            let notePos = SIMD3<Float>(cameraPos.x, cameraPos.y, cameraPos.z) + normalizedDir * distance
+            
+            // Store position relative to scene origin (not centered)
+            placedWorldPosition = notePos
+            
+            print("📍 Note placed at: \(notePos)")
         }
         
         withAnimation(.spring(response: 0.3)) {
@@ -371,10 +391,14 @@ struct MemoryViewerView: View {
         let trimmedText = newNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
         
+        // Create transform from world position
+        let transform = SpatialNote.transformFromPosition(placedWorldPosition)
+        
         let note = SpatialNote(
+            anchorID: UUID(),  // Generate new anchor ID for viewer (no live ARSession)
             text: trimmedText,
             author: "me",
-            position: placedWorldPosition
+            transform: transform
         )
         noteStore.add(note)
         

@@ -12,6 +12,8 @@ struct ScanView: View {
     @State private var scanDistance: Float = 1.0
     @State private var showDistanceSlider = false
     @State private var userSetDistance: Float = 1.0
+    @State private var isAddingNote = false
+    @State private var noteText = ""
 
     var body: some View {
         ZStack {
@@ -21,6 +23,12 @@ struct ScanView: View {
             GridOverlay()
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
+            
+            // Crosshair for note placement
+            if isAddingNote {
+                NotePlacementCrosshair()
+                    .allowsHitTesting(false)
+            }
 
             VStack(spacing: 16) {
                 topBar
@@ -37,6 +45,12 @@ struct ScanView: View {
                 modePicker
 
                 Spacer()
+                
+                // Note input when adding
+                if isAddingNote {
+                    noteInputCard
+                        .transition(.scale.combined(with: .opacity))
+                }
 
                 bottomControls
             }
@@ -44,6 +58,7 @@ struct ScanView: View {
             .padding(.top, 16)
             .padding(.bottom, 90)
         }
+        .animation(.spring(response: 0.3), value: isAddingNote)
         .onAppear {
             if startScanOnAppear {
                 startScanOnAppear = false
@@ -253,14 +268,15 @@ struct ScanView: View {
 
     private var bottomControls: some View {
         HStack(spacing: 18) {
-            Button(action: capturePhoto) {
-                Image(systemName: "bolt.fill")
+            // Add Note button
+            Button(action: { isAddingNote.toggle() }) {
+                Image(systemName: isAddingNote ? "xmark" : "note.text.badge.plus")
                     .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(AppTheme.ink)
+                    .foregroundColor(isAddingNote ? .white : AppTheme.ink)
                     .frame(width: 54, height: 54)
                     .background(
                         Circle()
-                            .fill(Color.white.opacity(0.9))
+                            .fill(isAddingNote ? AppTheme.accentYellow : Color.white.opacity(0.9))
                             .overlay(
                                 Circle()
                                     .stroke(AppTheme.ink, lineWidth: 2)
@@ -341,6 +357,68 @@ struct ScanView: View {
     private func capturePhoto() {
         NotificationCenter.default.post(name: .capturePhoto, object: nil)
     }
+    
+    private var noteInputCard: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "target")
+                    .font(.system(size: 14, weight: .bold))
+                Text("Aim crosshair and add note")
+                    .font(AppTheme.titleFont(size: 12))
+            }
+            .foregroundColor(AppTheme.ink.opacity(0.7))
+            
+            HStack(spacing: 10) {
+                TextField("What's here?", text: $noteText)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(AppTheme.ink)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.white)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(AppTheme.ink.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+                
+                Button(action: createNote) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
+                        .background(
+                            Circle()
+                                .fill(noteText.isEmpty ? AppTheme.ink.opacity(0.3) : AppTheme.ink)
+                        )
+                }
+                .disabled(noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(AppTheme.accentYellow)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(AppTheme.ink, lineWidth: 2)
+                )
+        )
+        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+    }
+    
+    private func createNote() {
+        let text = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        
+        // Create note at screen center via notification
+        let payload = CreateNotePayload(text: text)
+        NotificationCenter.default.post(name: .createSpatialNote, object: payload)
+        
+        // Reset state
+        noteText = ""
+        isAddingNote = false
+    }
 }
 
 private enum ScanMode: CaseIterable {
@@ -397,6 +475,55 @@ private struct GridOverlay: View {
                 }
             }
             .stroke(Color.white.opacity(0.15), lineWidth: 1)
+        }
+    }
+}
+
+/// Crosshair overlay for targeting note placement
+struct NotePlacementCrosshair: View {
+    @State private var isPulsing = false
+    
+    var body: some View {
+        ZStack {
+            // Outer animated ring
+            Circle()
+                .stroke(AppTheme.accentYellow, lineWidth: 2)
+                .frame(width: 60, height: 60)
+                .scaleEffect(isPulsing ? 1.2 : 1.0)
+                .opacity(isPulsing ? 0.3 : 0.8)
+            
+            // Middle ring
+            Circle()
+                .stroke(AppTheme.accentYellow, lineWidth: 2)
+                .frame(width: 40, height: 40)
+            
+            // Center dot
+            Circle()
+                .fill(AppTheme.accentYellow)
+                .frame(width: 8, height: 8)
+            
+            // Crosshair lines
+            Path { path in
+                // Horizontal lines
+                path.move(to: CGPoint(x: -30, y: 0))
+                path.addLine(to: CGPoint(x: -15, y: 0))
+                path.move(to: CGPoint(x: 15, y: 0))
+                path.addLine(to: CGPoint(x: 30, y: 0))
+                
+                // Vertical lines
+                path.move(to: CGPoint(x: 0, y: -30))
+                path.addLine(to: CGPoint(x: 0, y: -15))
+                path.move(to: CGPoint(x: 0, y: 15))
+                path.addLine(to: CGPoint(x: 0, y: 30))
+            }
+            .stroke(AppTheme.accentYellow, lineWidth: 2)
+            .frame(width: 60, height: 60)
+        }
+        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                isPulsing = true
+            }
         }
     }
 }

@@ -37,40 +37,57 @@ struct InlineNoteInput: View {
                                     .stroke(AppTheme.ink.opacity(0.3), lineWidth: 1)
                             )
                     )
+                    .submitLabel(.done)
+                    .onSubmit {
+                        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            isFocused = false
+                            onSave()
+                        }
+                    }
                 
-                // Action buttons
+                // Action buttons - always visible
                 HStack(spacing: 10) {
-                    Button(action: onCancel) {
+                    Button(action: {
+                        isFocused = false
+                        onCancel()
+                    }) {
                         Text("Cancel")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(AppTheme.ink.opacity(0.6))
+                            .foregroundColor(.red)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 10)
+                            .background(
+                                Capsule()
+                                    .fill(Color.white)
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(Color.red.opacity(0.5), lineWidth: 1.5)
+                                    )
+                            )
                     }
                     
                     Spacer()
                     
-                    Button(action: onSave) {
+                    Button(action: {
+                        isFocused = false
+                        onSave()
+                    }) {
                         HStack(spacing: 6) {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 12, weight: .bold))
                             Text("Save")
                                 .font(.system(size: 14, weight: .bold))
                         }
-                        .foregroundColor(AppTheme.ink)
+                        .foregroundColor(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(
                             Capsule()
-                                .fill(Color.white)
-                                .overlay(
-                                    Capsule()
-                                        .stroke(AppTheme.ink, lineWidth: 2)
-                                )
+                                .fill(AppTheme.ink)
                         )
                     }
                     .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
+                    .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
                 }
             }
             .padding(16)
@@ -86,7 +103,9 @@ struct InlineNoteInput: View {
         .frame(maxWidth: 280)
         .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 4)
         .onAppear {
-            isFocused = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                isFocused = true
+            }
         }
     }
 }

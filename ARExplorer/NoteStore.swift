@@ -49,6 +49,7 @@ class NoteStore: ObservableObject {
         do {
             let data = try Data(contentsOf: notesFileURL)
             let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
             notes = try decoder.decode([SpatialNote].self, from: data)
             print("✅ Loaded \(notes.count) notes from \(notesFileURL.lastPathComponent)")
         } catch {
@@ -61,6 +62,7 @@ class NoteStore: ObservableObject {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(notes)
             try data.write(to: notesFileURL, options: .atomic)
             print("✅ Saved \(notes.count) notes to \(notesFileURL.lastPathComponent)")

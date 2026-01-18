@@ -4,6 +4,7 @@ import ARKit
 import UIKit
 import simd
 import CoreVideo
+import Combine
 
 
 struct ARViewContainer: UIViewRepresentable {
@@ -21,6 +22,11 @@ struct ARViewContainer: UIViewRepresentable {
         
         // Live point cloud visualizer
         private var visualizer: PointCloudVisualizer?
+        
+        // Spatial notes
+        let noteManager = SpatialNoteManager()
+        private var noteEntityManager: NoteEntityManager?
+        private var notesCancellable: AnyCancellable?
 
         // MARK: - Setup
         
@@ -37,6 +43,25 @@ struct ARViewContainer: UIViewRepresentable {
             
             print("✅ Point cloud visualizer initialized")
         }
+        
+        func setupNotes() {
+            guard let arView = arView, let folder = currentSpaceFolder else { return }
+            
+            // Configure note entity manager
+            noteEntityManager = NoteEntityManager(arView: arView)
+            
+            // Configure note manager with folder
+            noteManager.configure(arView: arView, folderURL: folder)
+            
+            // Observe note changes to sync entities
+            notesCancellable = noteManager.$notes
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] notes in
+                    self?.noteEntityManager?.sync(with: notes)
+                }
+            
+            print("✅ Spatial notes initialized for: \(folder.lastPathComponent)")
+        }
 
         // MARK: - ARSessionDelegate
 
@@ -45,6 +70,19 @@ struct ARViewContainer: UIViewRepresentable {
             
             // Process frame with LiDAR depth map recorder
             recorder.process(frame: frame)
+            
+            // Update billboard orientations
+            noteEntityManager?.updateBillboards(cameraTransform: frame.camera.transform)
+        }
+        
+        func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+            // Handle anchor additions for relocalization
+            noteManager.handleAddedAnchors(anchors)
+        }
+        
+        func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+            // Update note transforms when ARKit updates anchors
+            noteManager.updateAnchors(anchors)
         }
 
         // MARK: - Actions
@@ -75,6 +113,9 @@ struct ARViewContainer: UIViewRepresentable {
             do {
                 currentSpaceFolder = try ScanStorage.makeNewSpaceFolder()
                 print("✅ Created space folder: \(currentSpaceFolder!.path)")
+                
+                // Initialize notes for this new folder
+                setupNotes()
             } catch {
                 print("❌ Failed to create space folder: \(error)")
             }
@@ -82,6 +123,7 @@ struct ARViewContainer: UIViewRepresentable {
             isScanning = true
             recorder.reset()
             visualizer?.clear()  // Clear previous point cloud visualization
+            noteEntityManager?.clear()  // Clear previous note entities
 
             print("✅ Started LiDAR scanning - move around to collect points")
         }
@@ -127,9 +169,16 @@ struct ARViewContainer: UIViewRepresentable {
                 print("No point cloud data yet. Walk around for a few seconds and try again.")
                 return
             }
+            
+            // Save world map for note relocalization
+            noteManager.saveWorldMap { success in
+                if success {
+                    print("✅ World map saved for note relocalization")
+                }
+            }
 
             // Save using the LiDAR recorder
-            recorder.savePLY { url in
+            recorder.savePLY { [weak self] url in
                 guard let url = url else {
                     print("❌ Failed to save PLY")
                     return
@@ -151,6 +200,20 @@ struct ARViewContainer: UIViewRepresentable {
                     NotificationCenter.default.post(name: .scanSaved, object: url)
                 }
             }
+        }
+        
+        // MARK: - Note Actions
+        
+        func createNoteAtCenter(text: String, completion: @escaping (SpatialNote?) -> Void) {
+            noteManager.createNoteAtScreenCenter(text: text, completion: completion)
+        }
+        
+        func createNote(at screenPoint: CGPoint, text: String, completion: @escaping (SpatialNote?) -> Void) {
+            noteManager.createNote(at: screenPoint, text: text, completion: completion)
+        }
+        
+        func deleteNote(_ note: SpatialNote) {
+            noteManager.deleteNote(note)
         }
     }
 
@@ -187,6 +250,30 @@ struct ARViewContainer: UIViewRepresentable {
         }
         NotificationCenter.default.addObserver(forName: .startScan, object: nil, queue: .main) { _ in
             context.coordinator.clearMap()
+        }
+        
+        // Spatial Note notifications
+        NotificationCenter.default.addObserver(forName: .createSpatialNote, object: nil, queue: .main) { notification in
+            guard let payload = notification.object as? CreateNotePayload else { return }
+            
+            if let screenPoint = payload.screenPoint {
+                context.coordinator.createNote(at: screenPoint, text: payload.text) { note in
+                    if let note = note {
+                        print("✅ Created note: \(note.text)")
+                    }
+                }
+            } else {
+                context.coordinator.createNoteAtCenter(text: payload.text) { note in
+                    if let note = note {
+                        print("✅ Created note at center: \(note.text)")
+                    }
+                }
+            }
+        }
+        
+        NotificationCenter.default.addObserver(forName: .deleteSpatialNote, object: nil, queue: .main) { notification in
+            guard let note = notification.object as? SpatialNote else { return }
+            context.coordinator.deleteNote(note)
         }
 
         return arView
