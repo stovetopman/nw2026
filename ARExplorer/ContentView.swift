@@ -1,44 +1,53 @@
+//
+//  ContentView.swift
+//  ARExplorer - LiDAR Memory
+//
+//  Main entry point with 3-state UI: Scanning → Saving → Exploring
+//
+
 import SwiftUI
 
 struct ContentView: View {
-    @State private var showViewer = false
-    @State private var latestUSDZ: URL?
-
+    @StateObject private var viewModel = AppViewModel()
+    
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .bottom) {
-                ARViewContainer()
-                    .ignoresSafeArea()
-
-                HStack(spacing: 12) {
-                    Button("Capture Photo") {
-                        NotificationCenter.default.post(name: .capturePhoto, object: nil)
+        ZStack {
+            switch viewModel.state {
+            case .scanning:
+                ScanningView(viewModel: viewModel)
+                    .transition(.opacity)
+                
+            case .saving(let progress):
+                SavingView(progress: progress)
+                    .transition(.opacity)
+                
+            case .exploring(let usdzURL):
+                FlyThroughView(usdzURL: usdzURL)
+                    .transition(.opacity)
+                    .overlay(alignment: .topLeading) {
+                        Button(action: {
+                            viewModel.returnToScanning()
+                        }) {
+                            HStack {
+                                Image(systemName: "arrow.left")
+                                Text("New Scan")
+                            }
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                        }
+                        .padding()
                     }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("Save Scan") {
-                        NotificationCenter.default.post(name: .saveScan, object: nil)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("View") {
-                        latestUSDZ = SpaceFinder.latestUSDZ()
-                        print("latestUSDZ:", latestUSDZ?.path ?? "nil")
-                        showViewer = latestUSDZ != nil
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .padding()
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .padding(.bottom, 18)
             }
-            .navigationDestination(isPresented: $showViewer) {
-                if let url = latestUSDZ {
-                    ViewerView(usdzURL: url)
-                } else {
-                    Text("No scan found.")
-                }
+        }
+        .animation(.easeInOut(duration: 0.3), value: viewModel.state)
+        .onReceive(viewModel.memoryManager.$exportProgress) { progress in
+            if case .saving = viewModel.state {
+                viewModel.state = .saving(progress: progress)
             }
         }
     }
@@ -47,4 +56,8 @@ struct ContentView: View {
 extension Notification.Name {
     static let capturePhoto = Notification.Name("capturePhoto")
     static let saveScan = Notification.Name("saveScan")
+}
+
+#Preview {
+    ContentView()
 }

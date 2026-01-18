@@ -52,3 +52,6 @@ fastlane/test_output
 
 # Code Injection
 iOSInjectionProject/
+
+# Project files
+ARExplorer.xcodeproj/project.pbxproj
