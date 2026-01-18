@@ -129,12 +129,15 @@ struct ARViewContainer: UIViewRepresentable {
 
             let scnScene = SCNScene(mdlAsset: asset)
 
-                scnScene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil)
+            scnScene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil)
 
-                let attrs = try? FileManager.default.attributesOfItem(atPath: usdzURL.path)
-                let size = (attrs?[.size] as? NSNumber)?.intValue ?? -1
-                print("Saved USDZ to \(usdzURL)")
-                print("USDZ bytes:", size)
+            let attrs = try? FileManager.default.attributesOfItem(atPath: usdzURL.path)
+            let size = (attrs?[.size] as? NSNumber)?.intValue ?? -1
+            print("Saved USDZ to \(usdzURL)")
+            print("USDZ bytes:", size)
+            if FileManager.default.fileExists(atPath: usdzURL.path) {
+                NotificationCenter.default.post(name: .scanSaved, object: usdzURL)
+            }
         }
     }
 
@@ -147,9 +150,6 @@ struct ARViewContainer: UIViewRepresentable {
 
         // Helpful while scanning
         arView.debugOptions = [.showSceneUnderstanding]
-
-        // Create a new folder for this scan session
-        context.coordinator.currentSpaceFolder = try? ScanStorage.makeNewSpaceFolder()
 
         // AR config (LiDAR mesh)
         let config = ARWorldTrackingConfiguration()
@@ -166,6 +166,9 @@ struct ARViewContainer: UIViewRepresentable {
             context.coordinator.saveUSDZ()
         }
         NotificationCenter.default.addObserver(forName: .clearMap, object: nil, queue: .main) { _ in
+            context.coordinator.clearMap()
+        }
+        NotificationCenter.default.addObserver(forName: .startScan, object: nil, queue: .main) { _ in
             context.coordinator.clearMap()
         }
 

@@ -1,57 +1,56 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var showViewer = false
-    @State private var latestUSDZ: URL?
+    @StateObject private var store = MemoryStore()
+    @State private var selectedTab: AppTab = .home
+    @State private var selectedMemory: MemoryItem?
+    @State private var startScanOnAppear = false
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .bottom) {
-                ARViewContainer()
-                    .ignoresSafeArea()
-
-                HStack(spacing: 12) {
-                    Button("Capture Photo") {
-                        NotificationCenter.default.post(name: .capturePhoto, object: nil)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("Save Scan") {
-                        NotificationCenter.default.post(name: .saveScan, object: nil)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("View") {
-                        latestUSDZ = SpaceFinder.latestUSDZ()
-                        print("latestUSDZ:", latestUSDZ?.path ?? "nil")
-                        showViewer = latestUSDZ != nil
-                    }
-                    .buttonStyle(.bordered)
-                    
-                    Button("Clear Map") {
-                        NotificationCenter.default.post(name: .clearMap, object: nil)
-                    }
-                    .buttonStyle(.bordered)
-
-                }
-                .padding()
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .padding(.bottom, 18)
-            }
-            .navigationDestination(isPresented: $showViewer) {
-                if let url = latestUSDZ {
-                    ViewerView(usdzURL: url)
-                } else {
-                    Text("No scan found.")
+        ZStack {
+            Group {
+                switch selectedTab {
+                case .home:
+                    HomeView(
+                        store: store,
+                        onStartScan: {
+                            startScanOnAppear = true
+                            selectedTab = .scan
+                        },
+                        onOpenDirectory: { selectedTab = .directory },
+                        onOpenMemory: { selectedMemory = $0 }
+                    )
+                case .scan:
+                    ScanView(
+                        store: store,
+                        startScanOnAppear: $startScanOnAppear,
+                        onBack: { selectedTab = .home },
+                        onOpenLatest: { selectedMemory = $0 }
+                    )
+                case .directory:
+                    DirectoryView(
+                        store: store,
+                        onOpenMemory: { selectedMemory = $0 },
+                        onStartScan: {
+                            startScanOnAppear = true
+                            selectedTab = .scan
+                        }
+                    )
+                case .settings:
+                    SettingsView()
                 }
             }
         }
+        .overlay(alignment: .bottom) {
+            AppTabBar(selected: $selectedTab)
+        }
+        .fullScreenCover(item: $selectedMemory) { item in
+            MemoryViewerView(item: item) {
+                selectedMemory = nil
+            }
+        }
+        .onAppear {
+            store.refresh()
+        }
     }
-}
-
-extension Notification.Name {
-    static let capturePhoto = Notification.Name("capturePhoto")
-    static let saveScan = Notification.Name("saveScan")
-    static let clearMap = Notification.Name("clearMap")
 }

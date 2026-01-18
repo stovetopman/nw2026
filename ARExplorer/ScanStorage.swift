@@ -14,6 +14,11 @@ enum ScanStorage {
             at: folder.appendingPathComponent("photos", isDirectory: true),
             withIntermediateDirectories: true
         )
+        let metadata: [String: Any] = [
+            "title": "New Memory",
+            "createdAt": ISO8601DateFormatter().string(from: Date())
+        ]
+        _ = try? saveJSON(metadata, to: folder.appendingPathComponent("info.json"))
         return folder
     }
 
