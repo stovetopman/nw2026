@@ -12,6 +12,8 @@ struct MemoryCardView: View {
                         image
                             .resizable()
                             .scaledToFill()
+                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                            .clipped()
                     } placeholder: {
                         placeholderImage
                     }
@@ -19,7 +21,8 @@ struct MemoryCardView: View {
                     placeholderImage
                 }
             }
-            .frame(height: isCompact ? 130 : 160)
+            .frame(maxWidth: .infinity)
+            .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
