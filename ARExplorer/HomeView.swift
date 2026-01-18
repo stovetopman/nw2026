@@ -6,6 +6,21 @@ struct HomeView: View {
     var onStartScan: () -> Void
     var onOpenDirectory: () -> Void
     var onOpenMemory: (MemoryItem) -> Void
+    
+    @State private var isSearching = false
+    @State private var searchText = ""
+    
+    // Profile
+    @AppStorage("userName") private var userName: String = "Anonymous User"
+    @State private var showProfileEdit = false
+    @State private var editingName = ""
+    
+    private var searchResults: [MemoryItem] {
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        return store.memories.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+    }
 
     var body: some View {
         ZStack {
@@ -14,58 +29,298 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header
-                    heroCard
-                    recentSection
-                    statsSection
+                    if isSearching {
+                        searchSection
+                    } else {
+                        heroCard
+                        recentSection
+                        statsSection
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 90)
             }
+            
+            // Profile edit overlay
+            if showProfileEdit {
+                profileEditOverlay
+            }
+        }
+    }
+    
+    private var profileEditOverlay: some View {
+        ZStack {
+            // Background dim
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    withAnimation { showProfileEdit = false }
+                }
+            
+            // Edit card
+            VStack(spacing: 20) {
+                HStack {
+                    Text("EDIT PROFILE")
+                        .font(AppTheme.titleFont(size: 18))
+                        .foregroundColor(AppTheme.ink)
+                    Spacer()
+                    Button(action: { withAnimation { showProfileEdit = false } }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(AppTheme.ink)
+                            .frame(width: 32, height: 32)
+                            .background(
+                                Circle()
+                                    .fill(Color.white.opacity(0.5))
+                            )
+                    }
+                }
+                
+                // Profile icon
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [AppTheme.accentBlue, AppTheme.accentPink],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 80, height: 80)
+                    Image(systemName: "person.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 36, weight: .bold))
+                }
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Your Name")
+                        .font(AppTheme.bodyFont(size: 12))
+                        .foregroundColor(AppTheme.softInk)
+                    
+                    TextField("", text: $editingName, prompt: Text("Enter your name...").foregroundColor(.black.opacity(0.5)))
+                        .font(.system(size: 16))
+                        .foregroundColor(.black)
+                        .tint(.black)
+                        .padding(16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.white)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(AppTheme.ink, lineWidth: 2)
+                                )
+                        )
+                }
+                
+                Button(action: {
+                    let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    userName = trimmed.isEmpty ? "Anonymous User" : trimmed
+                    withAnimation { showProfileEdit = false }
+                }) {
+                    Text("SAVE")
+                        .font(AppTheme.titleFont(size: 16))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(AppTheme.accentBlue)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(AppTheme.ink, lineWidth: 2)
+                                )
+                        )
+                }
+            }
+            .padding(24)
+            .background(
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(Color.white.opacity(0.95))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24)
+                            .stroke(AppTheme.ink, lineWidth: 2)
+                    )
+            )
+            .padding(.horizontal, 30)
         }
     }
 
     private var header: some View {
         HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [AppTheme.accentBlue, AppTheme.accentPink],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+            Button(action: {
+                editingName = userName
+                showProfileEdit = true
+            }) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [AppTheme.accentBlue, AppTheme.accentPink],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
-                    .frame(width: 52, height: 52)
-                Image(systemName: "person.fill")
-                    .foregroundColor(.white)
-                    .font(.system(size: 24, weight: .bold))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: "person.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 24, weight: .bold))
+                }
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("WELCOME BACK!")
                     .font(AppTheme.bodyFont(size: 11))
                     .foregroundColor(AppTheme.accentBlue)
-                Text("Alex Chen")
+                Text(userName)
                     .font(AppTheme.displayFont(size: 22))
                     .foregroundColor(AppTheme.ink)
             }
 
             Spacer()
 
-            Button(action: {}) {
-                Image(systemName: "magnifyingglass")
+            Button(action: {
+                withAnimation {
+                    isSearching.toggle()
+                    if !isSearching {
+                        searchText = ""
+                    }
+                }
+            }) {
+                Image(systemName: isSearching ? "xmark" : "magnifyingglass")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(AppTheme.ink)
                     .frame(width: 44, height: 44)
                     .background(
                         RoundedRectangle(cornerRadius: 14)
-                            .fill(Color.white)
+                            .fill(isSearching ? AppTheme.accentYellow : Color.white)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14)
                                     .stroke(AppTheme.ink, lineWidth: 2)
                             )
                     )
+            }
+        }
+    }
+    
+    private var searchSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Search bar
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(AppTheme.softInk)
+                
+                TextField("", text: $searchText, prompt: Text("Search memories...").foregroundColor(AppTheme.softInk))
+                    .font(.system(size: 16))
+                    .foregroundColor(.black)
+                    .tint(.black)
+                
+                if !searchText.isEmpty {
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(AppTheme.softInk)
+                    }
+                }
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.white)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(AppTheme.ink, lineWidth: 2)
+                    )
+            )
+            
+            // Search results
+            if searchText.isEmpty {
+                Text("Type to search your memories")
+                    .font(AppTheme.bodyFont(size: 14))
+                    .foregroundColor(AppTheme.softInk)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 40)
+            } else if searchResults.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 40))
+                        .foregroundColor(AppTheme.softInk)
+                    Text("No memories found")
+                        .font(AppTheme.titleFont(size: 16))
+                        .foregroundColor(AppTheme.ink)
+                    Text("Try a different search term")
+                        .font(AppTheme.bodyFont(size: 14))
+                        .foregroundColor(AppTheme.softInk)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+            } else {
+                Text("\(searchResults.count) result\(searchResults.count == 1 ? "" : "s")")
+                    .font(AppTheme.bodyFont(size: 12))
+                    .foregroundColor(AppTheme.softInk)
+                
+                ForEach(searchResults) { item in
+                    Button {
+                        onOpenMemory(item)
+                    } label: {
+                        HStack(spacing: 14) {
+                            if let previewURL = item.previewURL {
+                                AsyncImage(url: previewURL) { image in
+                                    image
+                                        .resizable()
+                                        .scaledToFill()
+                                } placeholder: {
+                                    Rectangle()
+                                        .fill(AppTheme.accentBlue.opacity(0.2))
+                                }
+                                .frame(width: 60, height: 60)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(AppTheme.ink, lineWidth: 2)
+                                )
+                            } else {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(AppTheme.accentBlue.opacity(0.2))
+                                    .frame(width: 60, height: 60)
+                                    .overlay(
+                                        Image(systemName: "cube")
+                                            .foregroundColor(AppTheme.ink)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(AppTheme.ink, lineWidth: 2)
+                                    )
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.title)
+                                    .font(AppTheme.titleFont(size: 16))
+                                    .foregroundColor(AppTheme.ink)
+                                Text(item.dateText)
+                                    .font(AppTheme.bodyFont(size: 12))
+                                    .foregroundColor(AppTheme.softInk)
+                            }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(AppTheme.softInk)
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(Color.white)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(AppTheme.ink, lineWidth: 2)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -178,7 +433,8 @@ struct HomeView: View {
                                 MemoryCardView(
                                     item: item,
                                     isCompact: true,
-                                    onDelete: { store.deleteMemory(item) }
+                                    onDelete: { store.deleteMemory(item) },
+                                    onFavorite: { store.toggleFavorite(item) }
                                 )
                                 .frame(width: 200)
                             }

@@ -25,6 +25,9 @@ struct MemoryViewerView: View {
     // Timer for crosshair focus tracking
     @State private var focusTimer: Timer?
     
+    // Captured badge visibility
+    @State private var showCapturedBadge = true
+    
     init(item: MemoryItem, onClose: @escaping () -> Void) {
         self.item = item
         self.onClose = onClose
@@ -319,25 +322,36 @@ struct MemoryViewerView: View {
 
                 Spacer()
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "calendar")
-                        Text("MEMORY")
-                            .font(AppTheme.titleFont(size: 12))
+                if showCapturedBadge {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "calendar")
+                            Text("MEMORY")
+                                .font(AppTheme.titleFont(size: 12))
+                        }
+                        Text("Captured\n\(relativeDateText)")
+                            .font(AppTheme.displayFont(size: 18))
                     }
-                    Text("Captured\n\(relativeDateText)")
-                        .font(AppTheme.displayFont(size: 18))
+                    .foregroundColor(.white)
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18)
+                            .fill(AppTheme.accentPink)
+                            .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.ink, lineWidth: 2))
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }
-                .foregroundColor(.white)
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(AppTheme.accentPink)
-                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.ink, lineWidth: 2))
-                )
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
+            .onAppear {
+                // Hide captured badge after 3 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    withAnimation {
+                        showCapturedBadge = false
+                    }
+                }
+            }
             
             Spacer()
 

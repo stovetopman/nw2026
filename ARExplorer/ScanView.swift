@@ -117,24 +117,8 @@ struct ScanView: View {
     }
 
     private var topBar: some View {
-        HStack {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(AppTheme.ink)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(Color.white.opacity(0.9))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(AppTheme.ink, lineWidth: 2)
-                            )
-                    )
-            }
-
-            Spacer()
-
+        ZStack {
+            // Centered status indicator
             HStack(spacing: 10) {
                 Circle()
                     .fill(isRecording ? AppTheme.accentBlue : AppTheme.accentPink)
@@ -153,22 +137,24 @@ struct ScanView: View {
                             .stroke(AppTheme.ink, lineWidth: 2)
                     )
             )
-
-            Spacer()
-
-            Button(action: {}) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(AppTheme.ink)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(Color.white.opacity(0.9))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(AppTheme.ink, lineWidth: 2)
-                            )
-                    )
+            
+            // Back button on the left
+            HStack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(AppTheme.ink)
+                        .frame(width: 44, height: 44)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color.white.opacity(0.9))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(AppTheme.ink, lineWidth: 2)
+                                )
+                        )
+                }
+                Spacer()
             }
         }
     }

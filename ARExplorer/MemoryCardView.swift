@@ -8,31 +8,48 @@ struct MemoryCardView: View {
     var onGoToFile: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var onShare: (() -> Void)? = nil
+    var onFavorite: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ZStack(alignment: .topLeading) {
-                if let previewURL = item.previewURL {
-                    AsyncImage(url: previewURL) { image in
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
-                            .clipped()
-                    } placeholder: {
+            ZStack(alignment: .topTrailing) {
+                ZStack(alignment: .topLeading) {
+                    if let previewURL = item.previewURL {
+                        AsyncImage(url: previewURL) { image in
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                                .clipped()
+                        } placeholder: {
+                            placeholderImage
+                        }
+                    } else {
                         placeholderImage
                     }
-                } else {
-                    placeholderImage
+                }
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(AppTheme.ink, lineWidth: 2)
+                )
+                
+                // Favorite indicator
+                if item.isFavorite && !isSelectionMode {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(AppTheme.accentYellow)
+                        .padding(8)
+                        .background(
+                            Circle()
+                                .fill(Color.white)
+                                .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
+                        )
+                        .padding(8)
                 }
             }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(AppTheme.ink, lineWidth: 2)
-            )
 
             Text(item.title)
                 .font(AppTheme.titleFont(size: isCompact ? 16 : 18))
@@ -78,6 +95,15 @@ struct MemoryCardView: View {
         .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 6)
         .if(!isSelectionMode) { view in
             view.contextMenu {
+                if let onFavorite = onFavorite {
+                    Button {
+                        onFavorite()
+                    } label: {
+                        Label(item.isFavorite ? "Remove from Favorites" : "Add to Favorites", 
+                              systemImage: item.isFavorite ? "star.slash" : "star.fill")
+                    }
+                }
+                
                 if let onShare = onShare {
                     Button {
                         onShare()

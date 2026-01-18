@@ -8,11 +8,34 @@ struct DirectoryView: View {
     @State private var selectedFilter: DirectoryFilter = .all
     @State private var isSelectionMode: Bool = false
     @State private var selectedMemories: Set<UUID> = []
+    @State private var isSearching: Bool = false
+    @State private var searchText: String = ""
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
         GridItem(.flexible(), spacing: 16)
     ]
+    
+    private var filteredMemories: [MemoryItem] {
+        var result = store.memories
+        
+        // Apply filter
+        switch selectedFilter {
+        case .favorites:
+            result = result.filter { $0.isFavorite }
+        case .recent:
+            result = Array(result.prefix(5))
+        case .all, .archived:
+            break
+        }
+        
+        // Apply search
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        }
+        
+        return result
+    }
 
     var body: some View {
         ZStack {
@@ -21,6 +44,9 @@ struct DirectoryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header
+                    if isSearching {
+                        searchBar
+                    }
                     filterChips
                     grid
                 }
@@ -88,46 +114,68 @@ struct DirectoryView: View {
                                         )
                                 )
                         }
-                        Button(action: {}) {
-                            Image(systemName: "magnifyingglass")
+                        Button(action: {
+                            withAnimation {
+                                isSearching.toggle()
+                                if !isSearching {
+                                    searchText = ""
+                                }
+                            }
+                        }) {
+                            Image(systemName: isSearching ? "xmark" : "magnifyingglass")
                                 .font(.system(size: 16, weight: .bold))
                                 .foregroundColor(AppTheme.ink)
                                 .frame(width: 40, height: 40)
                                 .background(
                                     RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color.white)
+                                        .fill(isSearching ? AppTheme.accentYellow : Color.white)
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 12)
                                                 .stroke(AppTheme.ink, lineWidth: 2)
                                         )
                                 )
                         }
-                        Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [AppTheme.accentPink, AppTheme.accentBlue],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 40, height: 40)
-                            .overlay(
-                                Image(systemName: "person.fill")
-                                    .foregroundColor(.white)
-                            )
-                            .overlay(
-                                Circle().stroke(AppTheme.ink, lineWidth: 2)
-                            )
                     }
                 }
             }
 
-            if !isSelectionMode {
+            if !isSelectionMode && !isSearching {
                 Text("MY\nMEMORIES")
                     .font(AppTheme.displayFont(size: 30))
                     .foregroundColor(AppTheme.ink)
             }
         }
+    }
+    
+    private var searchBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(AppTheme.softInk)
+            
+            TextField("", text: $searchText, prompt: Text("Search memories...").foregroundColor(AppTheme.softInk))
+                .font(.system(size: 16))
+                .foregroundColor(.black)
+                .tint(.black)
+            
+            if !searchText.isEmpty {
+                Button(action: { searchText = "" }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(AppTheme.softInk)
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.white)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(AppTheme.ink, lineWidth: 2)
+                )
+        )
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     private var filterChips: some View {
@@ -159,7 +207,7 @@ struct DirectoryView: View {
 
     private var grid: some View {
         LazyVGrid(columns: columns, spacing: 16) {
-            ForEach(store.memories) { item in
+            ForEach(filteredMemories) { item in
                 Button {
                     if isSelectionMode {
                         toggleSelection(item)
@@ -172,7 +220,8 @@ struct DirectoryView: View {
                         isSelectionMode: isSelectionMode,
                         isSelected: selectedMemories.contains(item.id),
                         onGoToFile: { openInFilesApp(item: item) },
-                        onDelete: { store.deleteMemory(item) }
+                        onDelete: { store.deleteMemory(item) },
+                        onFavorite: { store.toggleFavorite(item) }
                     )
                 }
                 .buttonStyle(.plain)

@@ -9,8 +9,8 @@ enum ConfidenceThreshold: Int, CaseIterable {
     
     var title: String {
         switch self {
-        case .low: return "ALL"
-        case .medium: return "MEDIUM+"
+        case .low: return "LOW"
+        case .medium: return "MEDIUM"
         case .high: return "HIGH"
         }
     }

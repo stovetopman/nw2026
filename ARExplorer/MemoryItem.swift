@@ -8,6 +8,7 @@ struct MemoryItem: Identifiable, Hashable {
     let plyURL: URL
     let folderURL: URL
     let previewURL: URL?
+    var isFavorite: Bool
 
     var sizeText: String {
         let formatter = ByteCountFormatter()
