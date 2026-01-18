@@ -194,6 +194,13 @@ class PointCloudRecorder {
                 self.onNewPoints?(newPointsBatch)
             }
             
+            // Broadcast stats update to UI
+            let currentPointCount = self.points.count
+            DispatchQueue.main.async {
+                let stats = ScanStats(pointCount: currentPointCount, maxDistance: self.maxDistance)
+                NotificationCenter.default.post(name: .scanStatsUpdated, object: stats)
+            }
+            
             // Log progress
             let newPoints = self.points.count - beforeCount
             if newPoints > 0 && self.points.count % 10000 < newPoints {

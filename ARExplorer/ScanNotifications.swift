@@ -7,4 +7,11 @@ extension Notification.Name {
     static let startScan = Notification.Name("startScan")
     static let scanSaved = Notification.Name("scanSaved")
     static let viewerRecenter = Notification.Name("viewerRecenter")
+    static let scanStatsUpdated = Notification.Name("scanStatsUpdated")
+}
+
+/// Stats payload for scan updates
+struct ScanStats {
+    let pointCount: Int
+    let maxDistance: Float
 }

@@ -8,6 +8,8 @@ struct ScanView: View {
 
     @State private var isRecording = false
     @State private var scanMode: ScanMode = .point
+    @State private var pointCount: Int = 0
+    @State private var scanDistance: Float = 1.0
 
     var body: some View {
         ZStack {
@@ -39,6 +41,12 @@ struct ScanView: View {
             if startScanOnAppear {
                 startScanOnAppear = false
                 startScan()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .scanStatsUpdated)) { notification in
+            if let stats = notification.object as? ScanStats {
+                pointCount = stats.pointCount
+                scanDistance = stats.maxDistance
             }
         }
     }
@@ -102,9 +110,19 @@ struct ScanView: View {
 
     private var statsRow: some View {
         HStack {
-            StatPill(icon: "cube", text: "12,482 PTS")
+            StatPill(icon: "cube", text: formattedPointCount)
             Spacer()
-            StatPill(icon: "ruler", text: "1.2m DIST")
+            StatPill(icon: "ruler", text: String(format: "%.1fm DIST", scanDistance))
+        }
+    }
+    
+    private var formattedPointCount: String {
+        if pointCount >= 1_000_000 {
+            return String(format: "%.1fM PTS", Double(pointCount) / 1_000_000)
+        } else if pointCount >= 1_000 {
+            return String(format: "%.1fK PTS", Double(pointCount) / 1_000)
+        } else {
+            return "\(pointCount) PTS"
         }
     }
 
