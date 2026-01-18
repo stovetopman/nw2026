@@ -10,6 +10,7 @@ import Foundation
 import RealityKit
 import simd
 import Combine
+import QuartzCore  // For CADisplayLink
 
 /// Camera controller for orbit/pan/zoom gesture-based navigation
 @MainActor
