@@ -23,6 +23,11 @@ struct ScanView: View {
     @State private var pendingNotes: [SpatialNote] = []
     @State private var currentFolderURL: URL? = nil
     @State private var lastCameraPosition: SIMD3<Float> = SIMD3<Float>(0, 0, -1.5)
+    
+    // Memory naming
+    @State private var showNameInput = false
+    @State private var memoryName = ""
+    @State private var nameError: String? = nil
 
     var body: some View {
         ZStack {
@@ -63,6 +68,11 @@ struct ScanView: View {
             // Note input overlay
             if showNoteInput {
                 noteInputOverlay
+            }
+            
+            // Memory name input overlay
+            if showNameInput {
+                memoryNameInputOverlay
             }
         }
         .onAppear {
@@ -468,9 +478,36 @@ struct ScanView: View {
     }
 
     private func startScan() {
+        // Show name input overlay first
+        memoryName = ""
+        nameError = nil
+        withAnimation {
+            showNameInput = true
+        }
+    }
+    
+    private func confirmStartScan() {
+        // Validate name
+        let trimmedName = memoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        if trimmedName.isEmpty {
+            nameError = "Please enter a name"
+            return
+        }
+        
+        // Check for unique name
+        if store.memories.contains(where: { $0.title.lowercased() == trimmedName.lowercased() }) {
+            nameError = "This name is already used"
+            return
+        }
+        
+        withAnimation {
+            showNameInput = false
+        }
+        
         isRecording = true
         pendingNotes = []
-        NotificationCenter.default.post(name: .startScan, object: nil)
+        NotificationCenter.default.post(name: .startScan, object: trimmedName)
     }
 
     private func stopScan() {
@@ -575,6 +612,95 @@ struct ScanView: View {
             .background(
                 RoundedRectangle(cornerRadius: 24)
                     .fill(AppTheme.accentYellow.opacity(0.95))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24)
+                            .stroke(AppTheme.ink, lineWidth: 2)
+                    )
+            )
+            .padding(.horizontal, 30)
+        }
+    }
+    
+    // MARK: - Memory Name Input Overlay
+    
+    private var memoryNameInputOverlay: some View {
+        ZStack {
+            // Background dim
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    withAnimation { showNameInput = false }
+                }
+            
+            // Name input card
+            VStack(spacing: 20) {
+                HStack {
+                    Text("NAME YOUR MEMORY")
+                        .font(AppTheme.titleFont(size: 18))
+                        .foregroundColor(AppTheme.ink)
+                    Spacer()
+                    Button(action: { withAnimation { showNameInput = false } }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(AppTheme.ink)
+                            .frame(width: 32, height: 32)
+                            .background(
+                                Circle()
+                                    .fill(Color.white.opacity(0.5))
+                            )
+                    }
+                }
+                
+                Text("Give your memory a unique name")
+                    .font(.system(size: 14))
+                    .foregroundColor(AppTheme.ink.opacity(0.7))
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("", text: $memoryName, prompt: Text("Enter memory name...").foregroundColor(.black.opacity(0.5)))
+                        .font(.system(size: 16))
+                        .foregroundColor(.black)
+                        .tint(.black)
+                        .padding(16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.white)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(nameError != nil ? Color.red : AppTheme.ink, lineWidth: 2)
+                                )
+                        )
+                        .onChange(of: memoryName) { _ in
+                            nameError = nil
+                        }
+                    
+                    if let error = nameError {
+                        Text(error)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.red)
+                            .padding(.leading, 4)
+                    }
+                }
+                
+                Button(action: confirmStartScan) {
+                    Text("START SCANNING")
+                        .font(AppTheme.titleFont(size: 16))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(AppTheme.accentBlue)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(AppTheme.ink, lineWidth: 2)
+                                )
+                        )
+                }
+            }
+            .padding(24)
+            .background(
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(Color.white.opacity(0.95))
                     .overlay(
                         RoundedRectangle(cornerRadius: 24)
                             .stroke(AppTheme.ink, lineWidth: 2)

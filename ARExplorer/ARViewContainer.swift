@@ -90,7 +90,7 @@ struct ARViewContainer: UIViewRepresentable {
 
         // MARK: - Actions
         
-        func clearMap() {
+        func clearMap(title: String = "New Memory") {
             guard let arView else { return }
 
             // Configure AR session with LiDAR depth
@@ -114,7 +114,7 @@ struct ARViewContainer: UIViewRepresentable {
 
             // Start a fresh folder/session
             do {
-                currentSpaceFolder = try ScanStorage.makeNewSpaceFolder()
+                currentSpaceFolder = try ScanStorage.makeNewSpaceFolder(title: title)
                 print("✅ Created space folder: \(currentSpaceFolder!.path)")
                 
                 // Notify ScanView of the folder URL
@@ -229,8 +229,9 @@ struct ARViewContainer: UIViewRepresentable {
         NotificationCenter.default.addObserver(forName: .clearMap, object: nil, queue: .main) { _ in
             context.coordinator.clearMap()
         }
-        NotificationCenter.default.addObserver(forName: .startScan, object: nil, queue: .main) { _ in
-            context.coordinator.clearMap()
+        NotificationCenter.default.addObserver(forName: .startScan, object: nil, queue: .main) { notification in
+            let title = notification.object as? String ?? "New Memory"
+            context.coordinator.clearMap(title: title)
             // Capture initial thumbnail photo after a brief delay to ensure AR is ready
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 context.coordinator.capturePhoto()

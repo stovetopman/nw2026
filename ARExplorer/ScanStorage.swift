@@ -4,10 +4,10 @@ import simd
 
 
 enum ScanStorage {
-    static func makeNewSpaceFolder() throws -> URL {
+    static func makeNewSpaceFolder(title: String = "New Memory") throws -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let spaceId = UUID().uuidString
-        let folder = docs.appendingPathComponent("Spaces/\(spaceId)", isDirectory: true)
+        let folder = docs.appendingPathComponent("Spaces/\\(spaceId)", isDirectory: true)
 
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(
@@ -15,7 +15,7 @@ enum ScanStorage {
             withIntermediateDirectories: true
         )
         let metadata: [String: Any] = [
-            "title": "New Memory",
+            "title": title,
             "createdAt": ISO8601DateFormatter().string(from: Date())
         ]
         _ = try? saveJSON(metadata, to: folder.appendingPathComponent("info.json"))
