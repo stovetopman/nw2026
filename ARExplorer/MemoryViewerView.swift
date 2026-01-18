@@ -53,8 +53,8 @@ struct MemoryViewerView: View {
                     .allowsHitTesting(!isPlacingNote && viewerCoordinator.currentViewMode != .birdview)
                 }
                 
-                // Crosshair for birdview mode (NOT in Immersive mode)
-                if viewerCoordinator.currentViewMode == .birdview && !isPlacingNote && editingNote == nil {
+                // Crosshair for birdview mode (NOT in Immersive mode, only when loaded)
+                if viewerCoordinator.isReady && viewerCoordinator.currentViewMode == .birdview && !isPlacingNote && editingNote == nil {
                     crosshairView
                 }
                 
