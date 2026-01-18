@@ -2,7 +2,8 @@
 //  ARProcessor.swift
 //  ARExplorer
 //
-//  ARKit delegate for processing mesh anchors into point cloud.
+//  Production-grade ARKit processor for LiDAR point cloud capture.
+//  Uses temporal sync via didUpdate(frame:) for accurate color sampling.
 //
 
 import ARKit
@@ -11,7 +12,7 @@ import simd
 
 // MARK: - AR Processor
 
-/// Processes ARMeshAnchors and extracts colored points.
+/// Processes ARMeshAnchors with temporally-synchronized color sampling.
 final class ARProcessor: NSObject, ObservableObject {
     
     // MARK: - Properties
@@ -24,12 +25,12 @@ final class ARProcessor: NSObject, ObservableObject {
     /// AR Session
     private var session: ARSession?
     
-    /// Track last processed time for throttling
+    /// Throttling: Process every 100ms to prevent thermal throttling
     private var lastProcessTime: TimeInterval = 0
-    private let processInterval: TimeInterval = 0.1  // Process every 100ms
+    private let processInterval: TimeInterval = 0.1
     
-    /// Track processed anchor versions to avoid reprocessing unchanged meshes
-    private var processedAnchorVersions: [UUID: Int] = [:]
+    /// Version tracking: Skip unchanged meshes using buffer hash
+    private var processedAnchorHashes: [UUID: Int] = [:]
     
     // MARK: - Public API
     
@@ -37,13 +38,14 @@ final class ARProcessor: NSObject, ObservableObject {
     func start(session: ARSession, pointManager: PointManager) {
         self.session = session
         self.pointManager = pointManager
+        self.processedAnchorHashes.removeAll()
         session.delegate = self
         
         let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
         config.frameSemantics = []
         
-        session.run(config)
+        session.run(config, options: [.resetTracking, .removeExistingAnchors])
         isRunning = true
     }
     
@@ -58,33 +60,82 @@ final class ARProcessor: NSObject, ObservableObject {
 
 extension ARProcessor: ARSessionDelegate {
     
-    // Called every frame - this gives us correct temporal sync
+    /// Called every frame - provides temporally-synchronized color sampling
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard let pointManager = pointManager else { return }
+        guard let pointManager = pointManager, isRunning else { return }
         
-        // Throttle processing to avoid overwhelming the system
+        // Throttle to 10Hz processing
         let currentTime = frame.timestamp
         guard currentTime - lastProcessTime >= processInterval else { return }
         lastProcessTime = currentTime
         
+        // Get display transform for accurate 3D→2D projection
+        let pixelBuffer = frame.capturedImage
+        let imageSize = CGSize(
+            width: CVPixelBufferGetWidth(pixelBuffer),
+            height: CVPixelBufferGetHeight(pixelBuffer)
+        )
+        
+        // displayTransform maps normalized image coords to display coords
+        // We need the inverse to go from 3D projection to image sampling
+        let orientation = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.interfaceOrientation ?? .portrait
+        
+        let displayTransform = frame.displayTransform(
+            for: orientation,
+            viewportSize: imageSize
+        )
+        
         // Process mesh anchors with THIS frame's camera data
-        // This ensures color sampling uses the exact camera position/image
         for anchor in frame.anchors {
             guard let meshAnchor = anchor as? ARMeshAnchor else { continue }
             
-            // Check if this mesh version was already processed
-            let anchorID = meshAnchor.identifier
+            // Version tracking: compute simple hash of vertex buffer
             let geometry = meshAnchor.geometry
-            let currentVersion = geometry.vertices.count  // Use vertex count as simple version proxy
+            let bufferHash = computeBufferHash(geometry.vertices)
+            let anchorID = meshAnchor.identifier
             
-            if let lastVersion = processedAnchorVersions[anchorID], lastVersion == currentVersion {
-                continue  // Skip unchanged mesh
+            if let lastHash = processedAnchorHashes[anchorID], lastHash == bufferHash {
+                continue // Skip unchanged mesh
             }
-            processedAnchorVersions[anchorID] = currentVersion
+            processedAnchorHashes[anchorID] = bufferHash
             
-            let points = extractPoints(from: meshAnchor, frame: frame)
+            // Extract points with temporally-synchronized color
+            let points = extractPoints(
+                from: meshAnchor,
+                frame: frame,
+                displayTransform: displayTransform,
+                imageSize: imageSize
+            )
             pointManager.addPoints(points)
         }
+    }
+    
+    /// Compute simple hash of vertex buffer for version tracking
+    private func computeBufferHash(_ vertices: ARGeometrySource) -> Int {
+        // Use vertex count + first/last vertex positions as quick hash
+        let count = vertices.count
+        guard count > 0 else { return 0 }
+        
+        let buffer = vertices.buffer.contents()
+        let stride = vertices.stride
+        
+        // Sample first vertex
+        let first = buffer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+        
+        // Sample last vertex
+        let lastPtr = buffer.advanced(by: (count - 1) * stride)
+        let last = lastPtr.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+        
+        // Combine into hash
+        var hasher = Hasher()
+        hasher.combine(count)
+        hasher.combine(first.x)
+        hasher.combine(first.y)
+        hasher.combine(last.x)
+        hasher.combine(last.y)
+        return hasher.finalize()
     }
 }
 
@@ -92,34 +143,36 @@ extension ARProcessor: ARSessionDelegate {
 
 extension ARProcessor {
     
-    /// Extract colored points from a mesh anchor
-    private func extractPoints(from meshAnchor: ARMeshAnchor, frame: ARFrame) -> [ColoredPoint] {
+    /// Extract colored points using displayTransform for accurate projection
+    private func extractPoints(
+        from meshAnchor: ARMeshAnchor,
+        frame: ARFrame,
+        displayTransform: CGAffineTransform,
+        imageSize: CGSize
+    ) -> [ColoredPoint] {
         let geometry = meshAnchor.geometry
         let vertices = geometry.vertices
         let modelMatrix = meshAnchor.transform
         
-        // Get vertex data
         let vertexCount = vertices.count
         let vertexBuffer = vertices.buffer.contents()
         let vertexStride = vertices.stride
         
-        // Prepare for color sampling
         let pixelBuffer = frame.capturedImage
-        let imageWidth = CVPixelBufferGetWidth(pixelBuffer)
-        let imageHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let imageWidth = Int(imageSize.width)
+        let imageHeight = Int(imageSize.height)
         
-        // Get camera transform (world to camera)
-        let cameraTransform = frame.camera.transform
-        let cameraInverse = cameraTransform.inverse
+        // View and projection matrices for this frame
+        let viewMatrix = frame.camera.viewMatrix(for: .portrait)
+        let projectionMatrix = frame.camera.projectionMatrix(
+            for: .portrait,
+            viewportSize: imageSize,
+            zNear: 0.001,
+            zFar: 1000
+        )
+        let viewProjection = projectionMatrix * viewMatrix
         
-        // Get camera intrinsics (focal length and principal point)
-        let intrinsics = frame.camera.intrinsics
-        let fx = intrinsics[0][0]
-        let fy = intrinsics[1][1]
-        let cx = intrinsics[2][0]
-        let cy = intrinsics[2][1]
-        
-        // Lock pixel buffer for reading
+        // Lock pixel buffer
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
         
@@ -127,125 +180,110 @@ extension ARProcessor {
         points.reserveCapacity(vertexCount)
         
         for i in 0..<vertexCount {
-            // Read vertex position (local space)
-            let vertexPointer = vertexBuffer.advanced(by: i * vertexStride)
-            let localPosition = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-            
-            // Transform to world space
-            let localPos4 = SIMD4<Float>(localPosition.x, localPosition.y, localPosition.z, 1.0)
-            let worldPos4 = modelMatrix * localPos4
-            let worldPosition = SIMD3<Float>(worldPos4.x, worldPos4.y, worldPos4.z)
-            
-            // Transform world position to camera space
-            let cameraPos4 = cameraInverse * worldPos4
-            let cameraPos = SIMD3<Float>(cameraPos4.x, cameraPos4.y, cameraPos4.z)
-            
-            // Sample color from camera image
-            let color = sampleColorFromIntrinsics(
-                cameraPosition: cameraPos,
-                fx: fx, fy: fy, cx: cx, cy: cy,
-                pixelBuffer: pixelBuffer,
-                imageWidth: imageWidth,
-                imageHeight: imageHeight
-            )
-            
-            points.append(ColoredPoint(position: worldPosition, color: color))
+            autoreleasepool {
+                let vertexPointer = vertexBuffer.advanced(by: i * vertexStride)
+                let localPosition = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                
+                // Transform to world space
+                let localPos4 = SIMD4<Float>(localPosition.x, localPosition.y, localPosition.z, 1.0)
+                let worldPos4 = modelMatrix * localPos4
+                let worldPosition = SIMD3<Float>(worldPos4.x, worldPos4.y, worldPos4.z)
+                
+                // Project to clip space
+                let clipPos = viewProjection * worldPos4
+                
+                // Skip points behind camera
+                guard clipPos.w > 0.001 else {
+                    points.append(ColoredPoint(position: worldPosition, color: SIMD3<UInt8>(180, 170, 160)))
+                    return
+                }
+                
+                // Normalized device coordinates (-1 to 1)
+                let ndc = SIMD3<Float>(
+                    clipPos.x / clipPos.w,
+                    clipPos.y / clipPos.w,
+                    clipPos.z / clipPos.w
+                )
+                
+                // Convert to normalized image coordinates (0 to 1)
+                let normalizedX = (ndc.x + 1.0) * 0.5
+                let normalizedY = (1.0 - ndc.y) * 0.5  // Flip Y for image coords
+                
+                // Apply display transform for orientation correction
+                let normalizedPoint = CGPoint(x: CGFloat(normalizedX), y: CGFloat(normalizedY))
+                let transformedPoint = normalizedPoint.applying(displayTransform)
+                
+                // Convert to pixel coordinates
+                let pixelX = Int(transformedPoint.x * CGFloat(imageWidth - 1))
+                let pixelY = Int(transformedPoint.y * CGFloat(imageHeight - 1))
+                
+                // Clamp and sample
+                let clampedX = max(0, min(imageWidth - 1, pixelX))
+                let clampedY = max(0, min(imageHeight - 1, pixelY))
+                
+                let color = samplePixel(pixelBuffer: pixelBuffer, x: clampedX, y: clampedY)
+                points.append(ColoredPoint(position: worldPosition, color: color))
+            }
         }
         
         return points
-    }
-    
-    /// Sample color using camera intrinsics (pinhole model)
-    private func sampleColorFromIntrinsics(
-        cameraPosition: SIMD3<Float>,
-        fx: Float, fy: Float, cx: Float, cy: Float,
-        pixelBuffer: CVPixelBuffer,
-        imageWidth: Int,
-        imageHeight: Int
-    ) -> SIMD3<UInt8> {
-        
-        // Point must be in front of camera (negative Z in camera space)
-        // Use a very small threshold to accept more points
-        guard cameraPosition.z < -0.001 else {
-            return SIMD3<UInt8>(180, 170, 160) // Neutral beige for behind-camera points
-        }
-        
-        // Project to image plane using pinhole camera model
-        let z = -cameraPosition.z
-        
-        // Project to pixel coordinates
-        let u = (fx * cameraPosition.x / z) + cx
-        let v = (fy * cameraPosition.y / z) + cy
-        
-        // Clamp to image bounds instead of rejecting
-        let pixelX = max(0, min(imageWidth - 1, Int(u)))
-        let pixelY = max(0, min(imageHeight - 1, Int(v)))
-        
-        // Sample pixel
-        return samplePixel(pixelBuffer: pixelBuffer, x: pixelX, y: pixelY)
     }
     
     /// Read a pixel from the buffer
     private func samplePixel(pixelBuffer: CVPixelBuffer, x: Int, y: Int) -> SIMD3<UInt8> {
         let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
         
-        // Handle YCbCr (420v/420f) format - common for camera
         if pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
            pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
             return sampleYCbCr(pixelBuffer: pixelBuffer, x: x, y: y)
         }
         
-        // Handle BGRA format
         if pixelFormat == kCVPixelFormatType_32BGRA {
             return sampleBGRA(pixelBuffer: pixelBuffer, x: x, y: y)
         }
         
-        // Fallback gray
         return SIMD3<UInt8>(128, 128, 128)
     }
     
-    /// Sample from YCbCr format
+    /// Sample from YCbCr format with BT.601 conversion
     private func sampleYCbCr(pixelBuffer: CVPixelBuffer, x: Int, y: Int) -> SIMD3<UInt8> {
-        // Y plane
-        guard let yPlane = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else {
+        guard let yPlane = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0),
+              let cbcrPlane = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1) else {
             return SIMD3<UInt8>(128, 128, 128)
         }
+        
         let yStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        let cbcrStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1)
+        
         let yValue = yPlane.advanced(by: y * yStride + x).assumingMemoryBound(to: UInt8.self).pointee
         
-        // CbCr plane (half resolution)
-        guard let cbcrPlane = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1) else {
-            return SIMD3<UInt8>(yValue, yValue, yValue)
-        }
-        let cbcrStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1)
         let cbcrX = (x / 2) * 2
         let cbcrY = y / 2
         let cbcrPtr = cbcrPlane.advanced(by: cbcrY * cbcrStride + cbcrX).assumingMemoryBound(to: UInt8.self)
         let cb = cbcrPtr.pointee
         let cr = cbcrPtr.advanced(by: 1).pointee
         
-        // Convert YCbCr to RGB (BT.601 full range for better color accuracy)
+        // BT.601 conversion with saturation boost
         let yf = Float(yValue) - 16.0
         let cbf = Float(cb) - 128.0
         let crf = Float(cr) - 128.0
         
-        // BT.601 coefficients with slight saturation boost
         var rf = 1.164 * yf + 1.596 * crf
         var gf = 1.164 * yf - 0.392 * cbf - 0.813 * crf
         var bf = 1.164 * yf + 2.017 * cbf
         
-        // Slight saturation boost for more vivid colors
+        // Saturation boost for vivid colors
         let gray = 0.299 * rf + 0.587 * gf + 0.114 * bf
-        let saturationBoost: Float = 1.15
-        rf = gray + (rf - gray) * saturationBoost
-        gf = gray + (gf - gray) * saturationBoost
-        bf = gray + (bf - gray) * saturationBoost
+        let boost: Float = 1.2
+        rf = gray + (rf - gray) * boost
+        gf = gray + (gf - gray) * boost
+        bf = gray + (bf - gray) * boost
         
-        let r = UInt8(clamping: Int(max(0, min(255, rf))))
-        let g = UInt8(clamping: Int(max(0, min(255, gf))))
-        let b = UInt8(clamping: Int(max(0, min(255, bf))))
-        
-        return SIMD3<UInt8>(r, g, b)
+        return SIMD3<UInt8>(
+            UInt8(clamping: Int(max(0, min(255, rf)))),
+            UInt8(clamping: Int(max(0, min(255, gf)))),
+            UInt8(clamping: Int(max(0, min(255, bf))))
+        )
     }
     
     /// Sample from BGRA format
@@ -255,11 +293,6 @@ extension ARProcessor {
         }
         let stride = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let ptr = baseAddress.advanced(by: y * stride + x * 4).assumingMemoryBound(to: UInt8.self)
-        
-        let b = ptr.pointee
-        let g = ptr.advanced(by: 1).pointee
-        let r = ptr.advanced(by: 2).pointee
-        
-        return SIMD3<UInt8>(r, g, b)
+        return SIMD3<UInt8>(ptr.advanced(by: 2).pointee, ptr.advanced(by: 1).pointee, ptr.pointee)
     }
 }

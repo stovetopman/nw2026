@@ -26,6 +26,11 @@ final class PointManager: ObservableObject {
     @Published private(set) var points: [ColoredPoint] = []
     @Published private(set) var uniqueCount: Int = 0
     
+    // MARK: - Memory Management
+    
+    /// Maximum points to prevent memory exhaustion (500K × 16 bytes ≈ 8MB)
+    private let maxPoints = 500_000
+    
     // MARK: - Voxel Filter
     
     /// Set of occupied voxel keys (2mm resolution for high density)
@@ -42,10 +47,13 @@ final class PointManager: ObservableObject {
     
     // MARK: - Public API
     
-    /// Add a point if its voxel is unoccupied.
+    /// Add a point if its voxel is unoccupied and under capacity.
     /// Returns true if the point was added.
     @discardableResult
     func addPoint(_ point: ColoredPoint) -> Bool {
+        // Memory cap: stop accepting points at limit
+        guard points.count < maxPoints else { return false }
+        
         let key = voxelKey(for: point.position)
         
         if occupiedVoxels.contains(key) {

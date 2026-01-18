@@ -2,17 +2,36 @@
 //  PointRenderView.swift
 //  ARExplorer
 //
-//  SceneKit point cloud renderer with orbit/zoom gestures.
-//  Uses SCNGeometryPrimitiveType.point for efficient point rendering.
+//  Production RealityKit 4.0 point cloud renderer using LowLevelMesh.
+//  Optimized vertex layout with .point topology and .uchar4Normalized colors.
 //
 
 import SwiftUI
-import SceneKit
+import RealityKit
+import Metal
 import simd
+
+// MARK: - Packed Vertex Structure (16 bytes, Metal-aligned)
+
+/// GPU-optimized vertex layout: position (12 bytes) + color (4 bytes packed RGBA)
+struct PackedVertex {
+    var x: Float
+    var y: Float  
+    var z: Float
+    var color: UInt32  // RGBA packed as uchar4
+    
+    init(position: SIMD3<Float>, color: SIMD3<UInt8>) {
+        self.x = position.x
+        self.y = position.y
+        self.z = position.z
+        // Pack RGBA into UInt32 (little-endian: ABGR in memory = RGBA when read as uchar4)
+        self.color = UInt32(color.x) | (UInt32(color.y) << 8) | (UInt32(color.z) << 16) | (255 << 24)
+    }
+}
 
 // MARK: - Point Render View
 
-/// Renders point cloud using SceneKit with full RGB colors.
+/// Renders point cloud using RealityKit LowLevelMesh with .point topology.
 struct PointRenderView: View {
     
     @ObservedObject var pointManager: PointManager
@@ -21,11 +40,11 @@ struct PointRenderView: View {
     
     var body: some View {
         ZStack {
-            // Full-screen point cloud view
-            PointCloudSceneView(pointManager: pointManager)
+            // RealityKit point cloud view
+            PointCloudRealityView(pointManager: pointManager)
                 .ignoresSafeArea()
             
-            // Minimal footer at bottom
+            // Minimal footer
             VStack {
                 Spacer()
                 footerBar
@@ -37,7 +56,6 @@ struct PointRenderView: View {
     
     private var footerBar: some View {
         HStack {
-            // Back button (if provided)
             if let onBack = onBack {
                 Button(action: onBack) {
                     Image(systemName: "arrow.left")
@@ -47,14 +65,12 @@ struct PointRenderView: View {
                 .padding(.trailing, 12)
             }
             
-            // Point count
             Text("\(formatCount(pointManager.uniqueCount)) pts")
                 .font(.system(.body, design: .monospaced))
                 .foregroundColor(.white)
             
             Spacer()
             
-            // Reset button
             if let onReset = onReset {
                 Button(action: onReset) {
                     Text("Reset")
@@ -79,124 +95,216 @@ struct PointRenderView: View {
     }
 }
 
-// MARK: - SceneKit View
+// MARK: - RealityKit Point Cloud View
 
-struct PointCloudSceneView: UIViewRepresentable {
+struct PointCloudRealityView: UIViewRepresentable {
     
     @ObservedObject var pointManager: PointManager
     
-    func makeUIView(context: Context) -> SCNView {
-        let scnView = SCNView()
-        scnView.backgroundColor = .black
-        scnView.allowsCameraControl = true  // Built-in orbit, pan, zoom
-        scnView.autoenablesDefaultLighting = false
+    func makeUIView(context: Context) -> ARView {
+        let arView = ARView(frame: .zero, cameraMode: .nonAR, automaticallyConfigureSession: false)
+        arView.environment.background = .color(.black)
         
-        // Create scene
-        let scene = SCNScene()
-        scnView.scene = scene
+        // Create anchor for point cloud
+        let anchor = AnchorEntity(world: .zero)
+        anchor.name = "PointCloudAnchor"
+        arView.scene.addAnchor(anchor)
         
-        // Add camera
-        let cameraNode = SCNNode()
-        cameraNode.camera = SCNCamera()
-        cameraNode.camera?.zNear = 0.01
-        cameraNode.camera?.zFar = 100
-        cameraNode.position = SCNVector3(0, 0, 3)
-        scene.rootNode.addChildNode(cameraNode)
+        // Create point cloud entity
+        let pointEntity = Entity()
+        pointEntity.name = "PointCloud"
+        anchor.addChild(pointEntity)
         
-        // Add point cloud node
-        let pointCloudNode = SCNNode()
-        pointCloudNode.name = "PointCloud"
-        scene.rootNode.addChildNode(pointCloudNode)
+        // Setup camera
+        setupCamera(in: arView)
         
-        // Initial update
-        updatePointCloud(node: pointCloudNode, points: pointManager.points)
+        // Enable gestures
+        context.coordinator.setupGestures(for: arView)
+        context.coordinator.pointEntity = pointEntity
+        context.coordinator.arView = arView
         
-        return scnView
+        return arView
     }
     
-    func updateUIView(_ uiView: SCNView, context: Context) {
-        guard let scene = uiView.scene,
-              let pointCloudNode = scene.rootNode.childNode(withName: "PointCloud", recursively: false) else {
-            return
-        }
-        
-        updatePointCloud(node: pointCloudNode, points: pointManager.points)
+    func updateUIView(_ uiView: ARView, context: Context) {
+        // Rebuild mesh when points change
+        context.coordinator.updatePointCloud(points: pointManager.points)
     }
     
-    private func updatePointCloud(node: SCNNode, points: [ColoredPoint]) {
-        // Remove existing geometry
-        node.geometry = nil
-        
-        guard !points.isEmpty else { return }
-        
-        // Create geometry from points
-        node.geometry = createPointGeometry(from: points)
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
     }
     
-    private func createPointGeometry(from points: [ColoredPoint]) -> SCNGeometry {
-        // Vertex positions
-        var vertices: [SCNVector3] = []
-        vertices.reserveCapacity(points.count)
+    private func setupCamera(in arView: ARView) {
+        let cameraEntity = PerspectiveCamera()
+        cameraEntity.camera.fieldOfViewInDegrees = 60
+        cameraEntity.position = [0, 0, 3]
+        cameraEntity.look(at: .zero, from: cameraEntity.position, relativeTo: nil)
         
-        // Vertex colors
-        var colors: [SCNVector3] = []
-        colors.reserveCapacity(points.count)
+        let cameraAnchor = AnchorEntity(world: .zero)
+        cameraAnchor.name = "CameraAnchor"
+        cameraAnchor.addChild(cameraEntity)
+        arView.scene.addAnchor(cameraAnchor)
+    }
+    
+    // MARK: - Coordinator
+    
+    class Coordinator: NSObject {
+        weak var pointEntity: Entity?
+        weak var arView: ARView?
         
-        // Center calculation for better viewing
-        var center = SIMD3<Float>.zero
+        private var cameraDistance: Float = 3.0
+        private var cameraAzimuth: Float = 0.0
+        private var cameraElevation: Float = 0.3
+        private var lastPanLocation: CGPoint?
         
-        for point in points {
-            vertices.append(SCNVector3(point.position.x, point.position.y, point.position.z))
-            colors.append(SCNVector3(
-                Float(point.color.x) / 255.0,
-                Float(point.color.y) / 255.0,
-                Float(point.color.z) / 255.0
-            ))
-            center += point.position
+        private var lastPointCount = 0
+        private var cachedMesh: MeshResource?
+        
+        // Throttle mesh rebuilds to 1Hz to reduce GPU memory pressure
+        private var lastMeshBuildTime: Date = .distantPast
+        private let meshRebuildInterval: TimeInterval = 1.0
+        
+        func setupGestures(for view: ARView) {
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan))
+            let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch))
+            view.addGestureRecognizer(pan)
+            view.addGestureRecognizer(pinch)
         }
         
-        if !points.isEmpty {
-            center /= Float(points.count)
+        @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+            let location = gesture.location(in: gesture.view)
+            
+            if gesture.state == .changed, let last = lastPanLocation {
+                let dx = Float(location.x - last.x) * 0.01
+                let dy = Float(location.y - last.y) * 0.01
+                cameraAzimuth -= dx
+                cameraElevation = max(-1.5, min(1.5, cameraElevation + dy))
+                updateCameraPosition()
+            }
+            
+            lastPanLocation = gesture.state == .ended ? nil : location
         }
         
-        // Create geometry sources
-        let vertexSource = SCNGeometrySource(vertices: vertices)
-        let colorSource = SCNGeometrySource(
-            data: Data(bytes: colors, count: colors.count * MemoryLayout<SCNVector3>.stride),
-            semantic: .color,
-            vectorCount: colors.count,
-            usesFloatComponents: true,
-            componentsPerVector: 3,
-            bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<SCNVector3>.stride
-        )
+        @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            if gesture.state == .changed {
+                cameraDistance = max(0.5, min(20, cameraDistance / Float(gesture.scale)))
+                gesture.scale = 1.0
+                updateCameraPosition()
+            }
+        }
         
-        // Create point element (no indices needed for points)
-        let indices = Array(0..<Int32(points.count))
-        let indexData = Data(bytes: indices, count: indices.count * MemoryLayout<Int32>.size)
-        let element = SCNGeometryElement(
-            data: indexData,
-            primitiveType: .point,
-            primitiveCount: points.count,
-            bytesPerIndex: MemoryLayout<Int32>.size
-        )
+        private func updateCameraPosition() {
+            guard let arView = arView,
+                  let cameraAnchor = arView.scene.findEntity(named: "CameraAnchor"),
+                  let camera = cameraAnchor.children.first else { return }
+            
+            let x = cameraDistance * cos(cameraElevation) * sin(cameraAzimuth)
+            let y = cameraDistance * sin(cameraElevation)
+            let z = cameraDistance * cos(cameraElevation) * cos(cameraAzimuth)
+            
+            camera.position = [x, y, z]
+            camera.look(at: .zero, from: camera.position, relativeTo: nil)
+        }
         
-        // Set point size - balance between detail and coverage
-        element.pointSize = 3.0
-        element.minimumPointScreenSpaceRadius = 2.0
-        element.maximumPointScreenSpaceRadius = 6.0
+        func updatePointCloud(points: [ColoredPoint]) {
+            guard let entity = pointEntity else { return }
+            
+            // Skip if unchanged
+            guard points.count != lastPointCount else { return }
+            
+            // Throttle mesh rebuilds to 1Hz to reduce memory pressure
+            let now = Date()
+            guard now.timeIntervalSince(lastMeshBuildTime) >= meshRebuildInterval else { return }
+            lastMeshBuildTime = now
+            lastPointCount = points.count
+            
+            guard !points.isEmpty else {
+                entity.components.remove(ModelComponent.self)
+                return
+            }
+            
+            // Build mesh on background thread
+            Task {
+                if let mesh = await buildLowLevelMesh(from: points) {
+                    await MainActor.run {
+                        var material = UnlitMaterial()
+                        material.color = .init(tint: .white)
+                        entity.components.set(ModelComponent(mesh: mesh, materials: [material]))
+                    }
+                }
+            }
+        }
         
-        // Create geometry
-        let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
-        
-        // Use unlit material to show vertex colors directly
-        let material = SCNMaterial()
-        material.lightingModel = .constant  // Unlit - shows vertex colors as-is
-        material.isDoubleSided = true
-        geometry.materials = [material]
-        
-        return geometry
+        /// Build LowLevelMesh with .point topology and packed RGBA colors
+        private func buildLowLevelMesh(from points: [ColoredPoint]) async -> MeshResource? {
+            guard #available(iOS 18.0, *) else { return nil }
+            
+            let vertexCount = points.count
+            guard vertexCount > 0 else { return nil }
+            
+            do {
+                // Vertex attributes: position (float3) + color (uchar4Normalized)
+                let attributes: [LowLevelMesh.Attribute] = [
+                    LowLevelMesh.Attribute(
+                        semantic: .position,
+                        format: .float3,
+                        offset: 0
+                    ),
+                    LowLevelMesh.Attribute(
+                        semantic: .color,
+                        format: .uchar4Normalized,
+                        offset: MemoryLayout<Float>.stride * 3  // After xyz
+                    )
+                ]
+                
+                let layout = LowLevelMesh.Layout(
+                    bufferIndex: 0,
+                    bufferStride: MemoryLayout<PackedVertex>.stride  // 16 bytes
+                )
+                
+                var descriptor = LowLevelMesh.Descriptor()
+                descriptor.vertexAttributes = attributes
+                descriptor.vertexLayouts = [layout]
+                descriptor.vertexCapacity = vertexCount
+                descriptor.indexCapacity = 0  // Point topology - no indices
+                
+                let mesh = try LowLevelMesh(descriptor: descriptor)
+                
+                // Fill vertex buffer with zero-copy write
+                mesh.withUnsafeMutableBytes(bufferIndex: 0) { buffer in
+                    let vertices = buffer.bindMemory(to: PackedVertex.self)
+                    for i in 0..<vertexCount {
+                        vertices[i] = PackedVertex(
+                            position: points[i].position,
+                            color: points[i].color
+                        )
+                    }
+                }
+                
+                // Compute bounds
+                var minP = points[0].position
+                var maxP = points[0].position
+                for point in points {
+                    minP = min(minP, point.position)
+                    maxP = max(maxP, point.position)
+                }
+                
+                // Create part with .point topology
+                let part = LowLevelMesh.Part(
+                    indexCount: vertexCount,
+                    topology: .point,
+                    bounds: BoundingBox(min: minP, max: maxP)
+                )
+                mesh.parts.replaceAll([part])
+                
+                return try MeshResource(from: mesh)
+                
+            } catch {
+                print("❌ LowLevelMesh error: \(error)")
+                return nil
+            }
+        }
     }
 }
 
@@ -205,12 +313,11 @@ struct PointCloudSceneView: UIViewRepresentable {
 #Preview {
     let manager = PointManager()
     
-    // Add test points with colors
-    for i in 0..<1000 {
-        let theta = Float(i) * 0.1
-        let r = Float(i) * 0.002
+    for i in 0..<5000 {
+        let theta = Float(i) * 0.05
+        let r = Float(i) * 0.0005
         let point = ColoredPoint(
-            position: SIMD3<Float>(r * cos(theta), Float(i) * 0.001 - 0.5, r * sin(theta)),
+            position: SIMD3<Float>(r * cos(theta), Float(i) * 0.0002 - 0.5, r * sin(theta)),
             color: SIMD3<UInt8>(
                 UInt8(128 + Int(127 * cos(theta))),
                 UInt8(128 + Int(127 * sin(theta))),
