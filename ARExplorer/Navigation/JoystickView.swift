@@ -2,7 +2,11 @@
 //  JoystickView.swift
 //  ARExplorer - LiDAR Memory
 //
-//  SwiftUI joystick components for fly-through navigation.
+//  DEPRECATED: This file is kept for reference only.
+//  The app now uses gesture-based OrbitNavigationView instead of joysticks.
+//  See: OrbitNavigationView.swift and CameraController.swift
+//
+//  Original: SwiftUI joystick components for fly-through navigation.
 //
 
 import SwiftUI

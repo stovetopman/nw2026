@@ -2,7 +2,11 @@
 //  FlyThroughView.swift
 //  ARExplorer - LiDAR Memory
 //
-//  RealityKit-based fly-through viewer with joystick navigation.
+//  DEPRECATED: This file is kept for reference only.
+//  The app now uses gesture-based OrbitNavigationView instead.
+//  See: OrbitNavigationView.swift and CameraController.swift
+//
+//  Original: RealityKit-based fly-through viewer with joystick navigation.
 //
 
 import SwiftUI

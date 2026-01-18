@@ -22,7 +22,7 @@ struct ContentView: View {
                     .transition(.opacity)
                 
             case .exploring(let usdzURL):
-                FlyThroughView(usdzURL: usdzURL)
+                OrbitNavigationView(usdzURL: usdzURL)
                     .transition(.opacity)
                     .overlay(alignment: .topLeading) {
                         Button(action: {
