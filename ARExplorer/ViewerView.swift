@@ -5,12 +5,13 @@ import simd
 
 struct ViewerView: View {
     let plyURL: URL
+    @ObservedObject var viewerCoordinator: NoteViewerCoordinator
     @State private var isLoading = true
     @State private var loadingProgress: String = "Reading file..."
 
     var body: some View {
         ZStack {
-            ViewerPointCloudContainer(plyURL: plyURL, isLoading: $isLoading, loadingProgress: $loadingProgress)
+            ViewerPointCloudContainer(plyURL: plyURL, isLoading: $isLoading, loadingProgress: $loadingProgress, viewerCoordinator: viewerCoordinator)
                 .ignoresSafeArea()
             
             if isLoading {
@@ -50,11 +51,13 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
     let plyURL: URL
     @Binding var isLoading: Bool
     @Binding var loadingProgress: String
+    var viewerCoordinator: NoteViewerCoordinator
 
     final class Coordinator {
         weak var scnView: SCNView?
         var pointNode: SCNNode?
         var cameraNode: SCNNode?
+        var pointCloudCenter: SIMD3<Float> = .zero
     }
 
     func makeCoordinator() -> Coordinator {
@@ -64,6 +67,11 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
     func makeUIView(context: Context) -> SCNView {
         let scnView = SCNView(frame: .zero)
         context.coordinator.scnView = scnView
+        
+        // Publish to coordinator for note overlay access
+        DispatchQueue.main.async {
+            self.viewerCoordinator.scnView = scnView
+        }
         
         let scene = SCNScene()
         scnView.scene = scene
@@ -110,7 +118,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                     self.loadingProgress = "Processing \(formatPointCount(points.count)) points..."
                 }
                 
-                let node = makePointCloudNode(from: points)
+                let (node, center) = makePointCloudNode(from: points)
                 
                 DispatchQueue.main.async {
                     self.loadingProgress = "Rendering..."
@@ -119,6 +127,11 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                 DispatchQueue.main.async {
                     scene.rootNode.addChildNode(node)
                     context.coordinator.pointNode = node
+                    context.coordinator.pointCloudCenter = center
+                    
+                    // Publish center to viewerCoordinator for note overlay
+                    self.viewerCoordinator.pointCloudCenter = center
+                    self.viewerCoordinator.isReady = true
                     
                     // Position camera based on point cloud bounds
                     if let boundingSphere = node.geometry?.boundingSphere {
@@ -145,9 +158,9 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
 
     func updateUIView(_ uiView: SCNView, context: Context) {}
 
-    private func makePointCloudNode(from points: [PLYPoint]) -> SCNNode {
+    private func makePointCloudNode(from points: [PLYPoint]) -> (node: SCNNode, center: SIMD3<Float>) {
         guard !points.isEmpty else {
-            return SCNNode()
+            return (SCNNode(), .zero)
         }
 
         var minPoint = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
@@ -219,7 +232,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         material.diffuse.contents = UIColor.white
         geometry.materials = [material]
 
-        return SCNNode(geometry: geometry)
+        return (SCNNode(geometry: geometry), center)
     }
 
     private func recenter(context: Context) {
