@@ -9,6 +9,7 @@ extension Notification.Name {
     static let viewerRecenter = Notification.Name("viewerRecenter")
     static let scanStatsUpdated = Notification.Name("scanStatsUpdated")
     static let updateScanDistance = Notification.Name("updateScanDistance")
+    static let updateConfidenceThreshold = Notification.Name("updateConfidenceThreshold")
 }
 
 /// Stats payload for scan updates
