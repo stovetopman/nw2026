@@ -316,8 +316,6 @@ struct MemoryViewerView: View {
                                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.ink, lineWidth: 2))
                         )
                     }
-
-                    viewModeIndicator
                 }
 
                 Spacer()
@@ -355,69 +353,96 @@ struct MemoryViewerView: View {
             
             Spacer()
 
-            // Bottom controls - simplified
-            HStack(spacing: 16) {
-                Button(action: { showShare = true }) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(AppTheme.ink)
-                        .frame(width: 52, height: 52)
-                        .background(
-                            Circle()
-                                .fill(Color.white.opacity(0.95))
-                                .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
-                        )
-                }
+            // Bottom controls
+            VStack(spacing: 12) {
+                // View mode switcher - centered above buttons
+                viewModeIndicator
                 
-                Button(action: recenter) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "viewfinder")
-                            .font(.system(size: 16, weight: .bold))
-                    }
-                    .foregroundColor(.white)
-                    .frame(width: 52, height: 52)
-                    .background(
-                        Circle()
-                            .fill(AppTheme.accentBlue)
-                            .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
-                    )
-                }
-                
-                // Hide add note button in Immersive mode
-                if viewerCoordinator.currentViewMode != .immersive {
-                    Button(action: startPlacingNote) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 20, weight: .bold))
+                // Action buttons
+                HStack(spacing: 16) {
+                    Button(action: { showShare = true }) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 18, weight: .bold))
                             .foregroundColor(AppTheme.ink)
                             .frame(width: 52, height: 52)
                             .background(
                                 Circle()
-                                    .fill(AppTheme.accentYellow)
+                                    .fill(Color.white.opacity(0.95))
                                     .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
                             )
+                    }
+                    
+                    Button(action: recenter) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "viewfinder")
+                                .font(.system(size: 16, weight: .bold))
+                        }
+                        .foregroundColor(.white)
+                        .frame(width: 52, height: 52)
+                        .background(
+                            Circle()
+                                .fill(AppTheme.accentBlue)
+                                .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
+                        )
+                    }
+                    
+                    // Hide add note button in Immersive mode
+                    if viewerCoordinator.currentViewMode != .immersive {
+                        Button(action: startPlacingNote) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(AppTheme.ink)
+                                .frame(width: 52, height: 52)
+                                .background(
+                                    Circle()
+                                        .fill(AppTheme.accentYellow)
+                                        .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
+                                )
+                        }
                     }
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 90)
+            .padding(.bottom, 40)
         }
     }
 
     private var viewModeIndicator: some View {
-        HStack(spacing: 6) {
-            Image(systemName: viewerCoordinator.currentViewMode.icon)
-                .font(.system(size: 10, weight: .bold))
-            Text(viewerCoordinator.currentViewMode.rawValue.uppercased())
-                .font(AppTheme.titleFont(size: 11))
+        HStack(spacing: 4) {
+            ForEach(ViewerMode.allCases, id: \.self) { mode in
+                viewModeButton(for: mode)
+            }
         }
-        .foregroundColor(AppTheme.ink)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(4)
         .background(
             Capsule()
                 .fill(Color.white.opacity(0.9))
                 .overlay(Capsule().stroke(AppTheme.ink, lineWidth: 2))
         )
+    }
+    
+    @ViewBuilder
+    private func viewModeButton(for mode: ViewerMode) -> some View {
+        let isActive = viewerCoordinator.currentViewMode == mode
+        Button {
+            viewerCoordinator.currentViewMode = mode
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: mode.icon)
+                    .font(.system(size: 10, weight: .bold))
+                if isActive {
+                    Text(mode.rawValue.uppercased())
+                        .font(AppTheme.titleFont(size: 10))
+                }
+            }
+            .foregroundColor(isActive ? .white : AppTheme.ink)
+            .padding(.horizontal, isActive ? 10 : 8)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(isActive ? AppTheme.ink : Color.clear)
+            )
+        }
     }
     
     // MARK: - Actions

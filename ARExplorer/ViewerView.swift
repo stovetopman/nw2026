@@ -37,7 +37,6 @@ struct ViewerView: View {
     @ObservedObject var viewerCoordinator: NoteViewerCoordinator
     @State private var isLoading = true
     @State private var loadingProgress: String = "Reading file..."
-    @State private var viewMode: ViewerMode = .birdview
 
     var body: some View {
         ZStack {
@@ -45,50 +44,13 @@ struct ViewerView: View {
                 plyURL: plyURL,
                 isLoading: $isLoading,
                 loadingProgress: $loadingProgress,
-                viewerCoordinator: viewerCoordinator,
-                viewMode: $viewMode
+                viewerCoordinator: viewerCoordinator
             )
             .ignoresSafeArea()
             
             if isLoading {
                 loadingOverlay
             }
-            
-            // View mode toggle button (bottom right)
-            if !isLoading {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        viewModeButton
-                    }
-                }
-                .padding(.bottom, 40)
-                .padding(.trailing, 20)
-            }
-        }
-    }
-    
-    private var viewModeButton: some View {
-        Button(action: {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                viewMode = viewMode.next
-            }
-        }) {
-            HStack(spacing: 8) {
-                Image(systemName: viewMode.next.icon)
-                    .font(.system(size: 16, weight: .semibold))
-                Text(viewMode.nextLabel)
-                    .font(.system(size: 14, weight: .medium))
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(
-                Capsule()
-                    .fill(viewMode == .immersive ? Color.orange.opacity(0.8) : Color.blue.opacity(0.8))
-                    .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
-            )
         }
     }
     
@@ -123,8 +85,11 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
     let plyURL: URL
     @Binding var isLoading: Bool
     @Binding var loadingProgress: String
-    var viewerCoordinator: NoteViewerCoordinator
-    @Binding var viewMode: ViewerMode
+    @ObservedObject var viewerCoordinator: NoteViewerCoordinator
+    
+    private var viewMode: ViewerMode {
+        viewerCoordinator.currentViewMode
+    }
 
     final class Coordinator: NSObject, ARSessionDelegate {
         weak var scnView: SCNView?
