@@ -41,6 +41,9 @@ struct HomeView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 90)
             }
+            .refreshable {
+                store.refresh()
+            }
             
             // Profile edit overlay
             if showProfileEdit {

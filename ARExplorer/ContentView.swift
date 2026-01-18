@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var selectedTab: AppTab = .home
     @State private var selectedMemory: MemoryItem?
     @State private var startScanOnAppear = false
+    @AppStorage("autoStartScan") private var autoStartScan = false
 
     var body: some View {
         ZStack {
@@ -47,6 +48,11 @@ struct ContentView: View {
         .fullScreenCover(item: $selectedMemory) { item in
             MemoryViewerView(item: item) {
                 selectedMemory = nil
+            }
+        }
+        .onChange(of: selectedTab) { newValue in
+            if newValue == .scan {
+                startScanOnAppear = autoStartScan
             }
         }
         .onAppear {
