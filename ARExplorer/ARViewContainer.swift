@@ -18,6 +18,25 @@ struct ARViewContainer: UIViewRepresentable {
         
         // Use the new LiDAR depth-based point cloud recorder
         private let recorder = PointCloudRecorder()
+        
+        // Live point cloud visualizer
+        private var visualizer: PointCloudVisualizer?
+
+        // MARK: - Setup
+        
+        func setupVisualizer() {
+            guard let arView = arView else { return }
+            
+            // Initialize visualizer with the ARView
+            visualizer = PointCloudVisualizer(arView: arView)
+            
+            // Connect the recorder to the visualizer
+            recorder.onNewPoints = { [weak self] points in
+                self?.visualizer?.update(newPoints: points)
+            }
+            
+            print("✅ Point cloud visualizer initialized")
+        }
 
         // MARK: - ARSessionDelegate
 
@@ -62,6 +81,7 @@ struct ARViewContainer: UIViewRepresentable {
             photoIndex = 0
             isScanning = true
             recorder.reset()
+            visualizer?.clear()  // Clear previous point cloud visualization
 
             print("✅ Started LiDAR scanning - move around to collect points")
         }
@@ -140,9 +160,9 @@ struct ARViewContainer: UIViewRepresentable {
         let arView = ARView(frame: .zero)
         context.coordinator.arView = arView
         arView.session.delegate = context.coordinator
-
-        // Show mesh overlay for visual feedback during scanning
-        arView.debugOptions = [.showSceneUnderstanding]
+        
+        // Initialize the point cloud visualizer
+        context.coordinator.setupVisualizer()
 
         // AR config with LiDAR depth
         let config = ARWorldTrackingConfiguration()

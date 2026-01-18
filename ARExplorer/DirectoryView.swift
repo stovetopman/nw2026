@@ -112,7 +112,9 @@ struct DirectoryView: View {
                 Button {
                     onOpenMemory(item)
                 } label: {
-                    MemoryCardView(item: item)
+                    MemoryCardView(item: item, onGoToFile: {
+                        openInFilesApp(item: item)
+                    })
                 }
                 .buttonStyle(.plain)
             }
@@ -149,6 +151,44 @@ struct DirectoryView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+    
+    private func openInFilesApp(item: MemoryItem) {
+        // Try to open the folder in Files app using shareddocuments scheme
+        let folderURL = item.folderURL
+        
+        // Construct Files app URL for this document
+        if let encodedPath = folderURL.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) {
+            let filesURLString = "shareddocuments://\(encodedPath)"
+            if let filesURL = URL(string: filesURLString) {
+                UIApplication.shared.open(filesURL, options: [:]) { success in
+                    if !success {
+                        // Fallback: show share sheet
+                        showShareSheet(for: folderURL)
+                    }
+                }
+                return
+            }
+        }
+        
+        // Fallback: show share sheet
+        showShareSheet(for: folderURL)
+    }
+    
+    private func showShareSheet(for url: URL) {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = windowScene.windows.first,
+              let rootVC = window.rootViewController else { return }
+        
+        let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        
+        // For iPad
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = window
+            popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
+        }
+        
+        rootVC.present(activityVC, animated: true)
     }
 }
 

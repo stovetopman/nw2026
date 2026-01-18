@@ -11,6 +11,9 @@ class PointCloudRecorder {
     private var frameCounter = 0
     private let frameSkip = 5  // Process every 5th frame
     
+    // Callback for live visualization - sends new points to visualizer
+    var onNewPoints: (([ScannedPoint]) -> Void)?
+    
     // Maximum distance from camera to capture points (in meters)
     private let maxDistance: Float = 1.0
     private let minDistance: Float = 0.1
@@ -93,6 +96,7 @@ class PointCloudRecorder {
             let colorScaleY = Float(colorHeight) / Float(depthHeight)
             
             let beforeCount = self.points.count
+            var newPointsBatch: [ScannedPoint] = []  // For live visualization
             
             // 4. Iterate through pixels
             // We skip pixels to balance quality and performance (step by 2 for higher density)
@@ -150,7 +154,18 @@ class PointCloudRecorder {
                     self.points.append(String(format: "%.5f %.5f %.5f %d %d %d",
                                               worldPoint.x, worldPoint.y, worldPoint.z,
                                               r, g, b))
+                    
+                    // Add to batch for live visualization
+                    newPointsBatch.append(ScannedPoint(
+                        position: SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z),
+                        color: (r: r, g: g, b: b)
+                    ))
                 }
+            }
+            
+            // Send batch to visualizer callback
+            if !newPointsBatch.isEmpty {
+                self.onNewPoints?(newPointsBatch)
             }
             
             // Log progress
