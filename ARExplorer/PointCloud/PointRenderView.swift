@@ -182,10 +182,10 @@ struct PointCloudSceneView: UIViewRepresentable {
             bytesPerIndex: MemoryLayout<Int32>.size
         )
         
-        // Set point size - small for crisp detail
-        element.pointSize = 2.0
-        element.minimumPointScreenSpaceRadius = 1.0
-        element.maximumPointScreenSpaceRadius = 4.0
+        // Set point size - balance between detail and coverage
+        element.pointSize = 3.0
+        element.minimumPointScreenSpaceRadius = 2.0
+        element.maximumPointScreenSpaceRadius = 6.0
         
         // Create geometry
         let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])

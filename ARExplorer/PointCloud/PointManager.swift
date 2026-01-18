@@ -2,7 +2,7 @@
 //  PointManager.swift
 //  ARExplorer
 //
-//  Minimal point cloud storage with 5mm voxel filtering for higher detail.
+//  Minimal point cloud storage with 2mm voxel filtering for high density.
 //
 
 import Foundation
@@ -18,7 +18,7 @@ struct ColoredPoint {
 
 // MARK: - Point Manager
 
-/// Stores unique points using a 5mm voxel grid filter for high detail.
+/// Stores unique points using a 2mm voxel grid filter for high density scans.
 final class PointManager: ObservableObject {
     
     // MARK: - Published State
@@ -28,15 +28,15 @@ final class PointManager: ObservableObject {
     
     // MARK: - Voxel Filter
     
-    /// Set of occupied voxel keys (5mm resolution for higher detail)
+    /// Set of occupied voxel keys (2mm resolution for high density)
     private var occupiedVoxels: Set<SIMD3<Int32>> = []
     
-    /// Convert world position to voxel key (5mm = 0.005m, so multiply by 200)
+    /// Convert world position to voxel key (2mm = 0.002m, so multiply by 500)
     private func voxelKey(for position: SIMD3<Float>) -> SIMD3<Int32> {
         return SIMD3<Int32>(
-            Int32(round(position.x * 200)),
-            Int32(round(position.y * 200)),
-            Int32(round(position.z * 200))
+            Int32(round(position.x * 500)),
+            Int32(round(position.y * 500)),
+            Int32(round(position.z * 500))
         )
     }
     

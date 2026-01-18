@@ -24,6 +24,13 @@ final class ARProcessor: NSObject, ObservableObject {
     /// AR Session
     private var session: ARSession?
     
+    /// Track last processed time for throttling
+    private var lastProcessTime: TimeInterval = 0
+    private let processInterval: TimeInterval = 0.1  // Process every 100ms
+    
+    /// Track processed anchor versions to avoid reprocessing unchanged meshes
+    private var processedAnchorVersions: [UUID: Int] = [:]
+    
     // MARK: - Public API
     
     /// Start AR session with mesh reconstruction
@@ -51,24 +58,29 @@ final class ARProcessor: NSObject, ObservableObject {
 
 extension ARProcessor: ARSessionDelegate {
     
-    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+    // Called every frame - this gives us correct temporal sync
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard let pointManager = pointManager else { return }
-        guard let frame = session.currentFrame else { return }
         
-        for anchor in anchors {
+        // Throttle processing to avoid overwhelming the system
+        let currentTime = frame.timestamp
+        guard currentTime - lastProcessTime >= processInterval else { return }
+        lastProcessTime = currentTime
+        
+        // Process mesh anchors with THIS frame's camera data
+        // This ensures color sampling uses the exact camera position/image
+        for anchor in frame.anchors {
             guard let meshAnchor = anchor as? ARMeshAnchor else { continue }
             
-            let points = extractPoints(from: meshAnchor, frame: frame)
-            pointManager.addPoints(points)
-        }
-    }
-    
-    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
-        guard let pointManager = pointManager else { return }
-        guard let frame = session.currentFrame else { return }
-        
-        for anchor in anchors {
-            guard let meshAnchor = anchor as? ARMeshAnchor else { continue }
+            // Check if this mesh version was already processed
+            let anchorID = meshAnchor.identifier
+            let geometry = meshAnchor.geometry
+            let currentVersion = geometry.vertices.count  // Use vertex count as simple version proxy
+            
+            if let lastVersion = processedAnchorVersions[anchorID], lastVersion == currentVersion {
+                continue  // Skip unchanged mesh
+            }
+            processedAnchorVersions[anchorID] = currentVersion
             
             let points = extractPoints(from: meshAnchor, frame: frame)
             pointManager.addPoints(points)
@@ -96,19 +108,16 @@ extension ARProcessor {
         let imageWidth = CVPixelBufferGetWidth(pixelBuffer)
         let imageHeight = CVPixelBufferGetHeight(pixelBuffer)
         
-        // Get display transform for correct UV mapping
-        let displayTransform = frame.displayTransform(
-            for: .portrait,
-            viewportSize: CGSize(width: imageWidth, height: imageHeight)
-        )
+        // Get camera transform (world to camera)
+        let cameraTransform = frame.camera.transform
+        let cameraInverse = cameraTransform.inverse
         
-        let viewMatrix = frame.camera.viewMatrix(for: .portrait)
-        let projectionMatrix = frame.camera.projectionMatrix(
-            for: .portrait,
-            viewportSize: CGSize(width: imageWidth, height: imageHeight),
-            zNear: 0.001,
-            zFar: 1000
-        )
+        // Get camera intrinsics (focal length and principal point)
+        let intrinsics = frame.camera.intrinsics
+        let fx = intrinsics[0][0]
+        let fy = intrinsics[1][1]
+        let cx = intrinsics[2][0]
+        let cy = intrinsics[2][1]
         
         // Lock pixel buffer for reading
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
@@ -127,12 +136,14 @@ extension ARProcessor {
             let worldPos4 = modelMatrix * localPos4
             let worldPosition = SIMD3<Float>(worldPos4.x, worldPos4.y, worldPos4.z)
             
+            // Transform world position to camera space
+            let cameraPos4 = cameraInverse * worldPos4
+            let cameraPos = SIMD3<Float>(cameraPos4.x, cameraPos4.y, cameraPos4.z)
+            
             // Sample color from camera image
-            let color = sampleColor(
-                worldPosition: worldPosition,
-                viewMatrix: viewMatrix,
-                projectionMatrix: projectionMatrix,
-                displayTransform: displayTransform,
+            let color = sampleColorFromIntrinsics(
+                cameraPosition: cameraPos,
+                fx: fx, fy: fy, cx: cx, cy: cy,
                 pixelBuffer: pixelBuffer,
                 imageWidth: imageWidth,
                 imageHeight: imageHeight
@@ -144,47 +155,33 @@ extension ARProcessor {
         return points
     }
     
-    /// Sample color from camera image for a world position
-    private func sampleColor(
-        worldPosition: SIMD3<Float>,
-        viewMatrix: simd_float4x4,
-        projectionMatrix: simd_float4x4,
-        displayTransform: CGAffineTransform,
+    /// Sample color using camera intrinsics (pinhole model)
+    private func sampleColorFromIntrinsics(
+        cameraPosition: SIMD3<Float>,
+        fx: Float, fy: Float, cx: Float, cy: Float,
         pixelBuffer: CVPixelBuffer,
         imageWidth: Int,
         imageHeight: Int
     ) -> SIMD3<UInt8> {
         
-        // Project world position to clip space
-        let worldPos4 = SIMD4<Float>(worldPosition.x, worldPosition.y, worldPosition.z, 1.0)
-        let viewPos = viewMatrix * worldPos4
-        let clipPos = projectionMatrix * viewPos
-        
-        // Skip if behind camera
-        guard clipPos.w > 0 else {
-            return SIMD3<UInt8>(128, 128, 128)
+        // Point must be in front of camera (negative Z in camera space)
+        // Use a very small threshold to accept more points
+        guard cameraPosition.z < -0.001 else {
+            return SIMD3<UInt8>(180, 170, 160) // Neutral beige for behind-camera points
         }
         
-        // Normalized device coordinates (-1 to 1)
-        let ndc = SIMD2<Float>(clipPos.x / clipPos.w, clipPos.y / clipPos.w)
+        // Project to image plane using pinhole camera model
+        let z = -cameraPosition.z
         
-        // Convert to 0-1 UV
-        var uv = SIMD2<Float>((ndc.x + 1) * 0.5, (1 - ndc.y) * 0.5)
+        // Project to pixel coordinates
+        let u = (fx * cameraPosition.x / z) + cx
+        let v = (fy * cameraPosition.y / z) + cy
         
-        // Apply display transform
-        let transformedPoint = CGPoint(x: CGFloat(uv.x), y: CGFloat(uv.y))
-            .applying(displayTransform)
-        uv = SIMD2<Float>(Float(transformedPoint.x), Float(transformedPoint.y))
+        // Clamp to image bounds instead of rejecting
+        let pixelX = max(0, min(imageWidth - 1, Int(u)))
+        let pixelY = max(0, min(imageHeight - 1, Int(v)))
         
-        // Clamp to valid range
-        uv.x = max(0, min(1, uv.x))
-        uv.y = max(0, min(1, uv.y))
-        
-        // Convert to pixel coordinates
-        let pixelX = Int(uv.x * Float(imageWidth - 1))
-        let pixelY = Int(uv.y * Float(imageHeight - 1))
-        
-        // Sample pixel (assuming BGRA or YCbCr format)
+        // Sample pixel
         return samplePixel(pixelBuffer: pixelBuffer, x: pixelX, y: pixelY)
     }
     
