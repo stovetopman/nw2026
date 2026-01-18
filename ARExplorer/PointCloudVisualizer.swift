@@ -38,11 +38,9 @@ class PointCloudVisualizer {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            // 1. Add new data to our arrays (only every 16th point for visualization)
-            for (index, point) in newPoints.enumerated() {
+            // 1. Add new data to our arrays
+            for point in newPoints {
                 if self.positions.count >= self.maxPoints { break }
-                // Only visualize every 16th point (reduce by 15/16)
-                if index % 16 != 0 { continue }
                 self.positions.append(point.position)
                 self.colors.append(point.color)
             }

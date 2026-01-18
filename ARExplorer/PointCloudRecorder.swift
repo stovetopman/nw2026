@@ -4,7 +4,8 @@ import Foundation
 class PointCloudRecorder {
     // We store points as simple strings for the PLY file (X Y Z R G B)
     private var points: [String] = []
-    private var pointKeys: Set<PointKey> = []  // For deduplication
+    private var pointKeys: Set<PointKey> = []  // For PLY deduplication
+    private var vizPointKeys: Set<PointKey> = []  // For visualization deduplication (separate)
     private let queue = DispatchQueue(label: "com.lidar.recorder", qos: .userInitiated)
     
     // We don't want to save every single frame (too much data), so we skip some
@@ -21,6 +22,8 @@ class PointCloudRecorder {
     // Grid scale for deduplication (higher = finer detail, more points)
     // 500 means points within 2mm are considered duplicates
     private let gridScale: Float = 500.0
+    // Coarser grid for visualization (100 = ~1cm resolution)
+    private let vizGridScale: Float = 25.0
     
     private struct PointKey: Hashable {
         let x: Int32
@@ -36,6 +39,7 @@ class PointCloudRecorder {
         queue.async { [weak self] in
             self?.points.removeAll(keepingCapacity: true)
             self?.pointKeys.removeAll(keepingCapacity: true)
+            self?.vizPointKeys.removeAll(keepingCapacity: true)
             self?.frameCounter = 0
         }
     }
@@ -96,70 +100,92 @@ class PointCloudRecorder {
             let colorScaleY = Float(colorHeight) / Float(depthHeight)
             
             let beforeCount = self.points.count
-            var newPointsBatch: [ScannedPoint] = []  // For live visualization
+            var newPointsBatch: [ScannedPoint] = []  // For live visualization (sparse)
             
-            // 4. Iterate through pixels
-            // We skip pixels to balance quality and performance (step by 2 for higher density)
-            for y in stride(from: 0, to: depthHeight, by: 2) {
-                for x in stride(from: 0, to: depthWidth, by: 2) {
-                    
-                    // Read depth value (Float32)
-                    let depthOffset = y * depthBytesPerRow + x * MemoryLayout<Float32>.size
-                    let depthInMeters = depthBase.load(fromByteOffset: depthOffset, as: Float32.self)
-                    
-                    // Filter: Only capture points within our distance range
-                    if depthInMeters < self.minDistance || depthInMeters > self.maxDistance { continue }
-                    if depthInMeters.isNaN || depthInMeters.isInfinite { continue }
-                    
-                    // --- MATH: Un-project 2D pixel to 3D Local Point ---
-                    // Using scaled intrinsics (fx, fy, cx, cy defined above)
-                    let xRw = (Float(x) - cx) * depthInMeters / fx
-                    let yRw = (Float(y) - cy) * depthInMeters / fy
-                    let zRw = -depthInMeters  // Camera looks down -Z axis
-                    
-                    // --- MATH: Transform Local Point to World Space ---
-                    let localPoint = SIMD4<Float>(xRw, -yRw, zRw, 1)  // Flip Y for world coords
-                    let worldPoint = cameraTransform * localPoint
-                    
-                    // Deduplication check
+            // Helper function to process a single pixel
+            func processPixel(x: Int, y: Int, forVisualization: Bool) -> (worldPoint: SIMD4<Float>, r: UInt8, g: UInt8, b: UInt8)? {
+                // Read depth value (Float32)
+                let depthOffset = y * depthBytesPerRow + x * MemoryLayout<Float32>.size
+                let depthInMeters = depthBase.load(fromByteOffset: depthOffset, as: Float32.self)
+                
+                // Filter: Only capture points within our distance range
+                if depthInMeters < self.minDistance || depthInMeters > self.maxDistance { return nil }
+                if depthInMeters.isNaN || depthInMeters.isInfinite { return nil }
+                
+                // --- MATH: Un-project 2D pixel to 3D Local Point ---
+                let xRw = (Float(x) - cx) * depthInMeters / fx
+                let yRw = (Float(y) - cy) * depthInMeters / fy
+                let zRw = -depthInMeters  // Camera looks down -Z axis
+                
+                // --- MATH: Transform Local Point to World Space ---
+                let localPoint = SIMD4<Float>(xRw, -yRw, zRw, 1)  // Flip Y for world coords
+                let worldPoint = cameraTransform * localPoint
+                
+                // Deduplication check
+                if forVisualization {
+                    // Use coarser grid for visualization dedup (~1cm)
+                    let key = PointKey(
+                        x: Int32((worldPoint.x * self.vizGridScale).rounded()),
+                        y: Int32((worldPoint.y * self.vizGridScale).rounded()),
+                        z: Int32((worldPoint.z * self.vizGridScale).rounded())
+                    )
+                    if self.vizPointKeys.contains(key) { return nil }
+                    self.vizPointKeys.insert(key)
+                } else {
+                    // Use fine grid for PLY dedup (~2mm)
                     let key = PointKey(
                         x: Int32((worldPoint.x * self.gridScale).rounded()),
                         y: Int32((worldPoint.y * self.gridScale).rounded()),
                         z: Int32((worldPoint.z * self.gridScale).rounded())
                     )
-                    if self.pointKeys.contains(key) { continue }
+                    if self.pointKeys.contains(key) { return nil }
                     self.pointKeys.insert(key)
-                    
-                    // --- COLOR: Map to RGB from YCbCr ---
-                    let colorX = min(Int(Float(x) * colorScaleX), colorWidth - 1)
-                    let colorY = min(Int(Float(y) * colorScaleY), colorHeight - 1)
-                    
-                    // Read Y (luminance)
-                    let yIndex = colorY * yBytesPerRow + colorX
-                    let yValue = Float(yPlane.load(fromByteOffset: yIndex, as: UInt8.self))
-                    
-                    // Read CbCr (chroma) - subsampled by 2
-                    let cbcrX = colorX / 2 * 2
-                    let cbcrY = colorY / 2
-                    let cbcrIndex = cbcrY * cbcrBytesPerRow + cbcrX
-                    let cb = Float(cbcrPlane.load(fromByteOffset: cbcrIndex, as: UInt8.self)) - 128.0
-                    let cr = Float(cbcrPlane.load(fromByteOffset: cbcrIndex + 1, as: UInt8.self)) - 128.0
-                    
-                    // YCbCr to RGB conversion
-                    let r = UInt8(clamping: Int(yValue + 1.402 * cr))
-                    let g = UInt8(clamping: Int(yValue - 0.344136 * cb - 0.714136 * cr))
-                    let b = UInt8(clamping: Int(yValue + 1.772 * cb))
-                    
-                    // Save string line: "X Y Z R G B"
-                    self.points.append(String(format: "%.5f %.5f %.5f %d %d %d",
-                                              worldPoint.x, worldPoint.y, worldPoint.z,
-                                              r, g, b))
-                    
-                    // Add to batch for live visualization
-                    newPointsBatch.append(ScannedPoint(
-                        position: SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z),
-                        color: (r: r, g: g, b: b)
-                    ))
+                }
+                
+                // --- COLOR: Map to RGB from YCbCr ---
+                let colorX = min(Int(Float(x) * colorScaleX), colorWidth - 1)
+                let colorY = min(Int(Float(y) * colorScaleY), colorHeight - 1)
+                
+                // Read Y (luminance)
+                let yIndex = colorY * yBytesPerRow + colorX
+                let yValue = Float(yPlane.load(fromByteOffset: yIndex, as: UInt8.self))
+                
+                // Read CbCr (chroma) - subsampled by 2
+                let cbcrX = colorX / 2 * 2
+                let cbcrY = colorY / 2
+                let cbcrIndex = cbcrY * cbcrBytesPerRow + cbcrX
+                let cb = Float(cbcrPlane.load(fromByteOffset: cbcrIndex, as: UInt8.self)) - 128.0
+                let cr = Float(cbcrPlane.load(fromByteOffset: cbcrIndex + 1, as: UInt8.self)) - 128.0
+                
+                // YCbCr to RGB conversion
+                let r = UInt8(clamping: Int(yValue + 1.402 * cr))
+                let g = UInt8(clamping: Int(yValue - 0.344136 * cb - 0.714136 * cr))
+                let b = UInt8(clamping: Int(yValue + 1.772 * cb))
+                
+                return (worldPoint, r, g, b)
+            }
+            
+            // 4. SPARSE loop for visualization (every 16th pixel) - run first, no dedup
+            for y in stride(from: 0, to: depthHeight, by: 16) {
+                for x in stride(from: 0, to: depthWidth, by: 16) {
+                    if let result = processPixel(x: x, y: y, forVisualization: true) {
+                        newPointsBatch.append(ScannedPoint(
+                            position: SIMD3<Float>(result.worldPoint.x, result.worldPoint.y, result.worldPoint.z),
+                            color: (r: result.r, g: result.g, b: result.b)
+                        ))
+                    }
+                }
+            }
+            
+            // 5. HIGH-RESOLUTION loop for PLY file (every 2nd pixel) - with dedup
+            for y in stride(from: 0, to: depthHeight, by: 2) {
+                for x in stride(from: 0, to: depthWidth, by: 2) {
+                    if let result = processPixel(x: x, y: y, forVisualization: false) {
+                        // Save string line: "X Y Z R G B"
+                        self.points.append(String(format: "%.5f %.5f %.5f %d %d %d",
+                                                  result.worldPoint.x, result.worldPoint.y, result.worldPoint.z,
+                                                  result.r, result.g, result.b))
+                    }
                 }
             }
             
