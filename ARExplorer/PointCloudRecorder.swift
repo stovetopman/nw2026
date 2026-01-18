@@ -1,6 +1,70 @@
 import ARKit
 import Foundation
 
+/// Metadata saved alongside PLY file to help orient the viewer correctly
+struct ScanMetadata: Codable {
+    /// Position where the scan started (world coords, usually near 0,0,0)
+    let recorderPosition: [Float]  // [x, y, z]
+    
+    /// The 3D point at the center of screen when recording started (crosshair target)
+    /// This gives us the forward direction vector: crosshairPoint - recorderPosition
+    let crosshairPoint: [Float]  // [x, y, z]
+    
+    /// The camera's up vector when recording started (typically close to world Y-up)
+    let upVector: [Float]  // [x, y, z]
+    
+    /// The camera's forward vector when recording started
+    let forwardVector: [Float]  // [x, y, z]
+    
+    /// The camera's right vector when recording started  
+    let rightVector: [Float]  // [x, y, z]
+    
+    /// The full camera transform matrix when recording started (4x4 as flat array, column-major)
+    let initialCameraTransform: [Float]
+    
+    // MARK: - Convenience accessors as SIMD3
+    
+    var recorderPositionSIMD: SIMD3<Float> {
+        SIMD3<Float>(recorderPosition[0], recorderPosition[1], recorderPosition[2])
+    }
+    
+    var crosshairPointSIMD: SIMD3<Float> {
+        SIMD3<Float>(crosshairPoint[0], crosshairPoint[1], crosshairPoint[2])
+    }
+    
+    var upVectorSIMD: SIMD3<Float> {
+        SIMD3<Float>(upVector[0], upVector[1], upVector[2])
+    }
+    
+    var forwardVectorSIMD: SIMD3<Float> {
+        SIMD3<Float>(forwardVector[0], forwardVector[1], forwardVector[2])
+    }
+    
+    var rightVectorSIMD: SIMD3<Float> {
+        SIMD3<Float>(rightVector[0], rightVector[1], rightVector[2])
+    }
+    
+    /// Computed: direction from recorder to crosshair (normalized)
+    var lookDirection: SIMD3<Float> {
+        let dir = crosshairPointSIMD - recorderPositionSIMD
+        let length = simd_length(dir)
+        return length > 0.001 ? dir / length : SIMD3<Float>(0, 0, -1)
+    }
+    
+    // MARK: - Initializer from SIMD types
+    
+    init(recorderPosition: SIMD3<Float>, crosshairPoint: SIMD3<Float>, 
+         upVector: SIMD3<Float>, forwardVector: SIMD3<Float>, 
+         rightVector: SIMD3<Float>, initialCameraTransform: [Float]) {
+        self.recorderPosition = [recorderPosition.x, recorderPosition.y, recorderPosition.z]
+        self.crosshairPoint = [crosshairPoint.x, crosshairPoint.y, crosshairPoint.z]
+        self.upVector = [upVector.x, upVector.y, upVector.z]
+        self.forwardVector = [forwardVector.x, forwardVector.y, forwardVector.z]
+        self.rightVector = [rightVector.x, rightVector.y, rightVector.z]
+        self.initialCameraTransform = initialCameraTransform
+    }
+}
+
 class PointCloudRecorder {
     // We store points as simple strings for the PLY file (X Y Z R G B)
     private var points: [String] = []
@@ -25,6 +89,10 @@ class PointCloudRecorder {
     private let gridScale: Float = 500.0
     // Coarser grid for visualization (100 = ~1cm resolution)
     private let vizGridScale: Float = 25.0
+    
+    // Scan metadata - captured when recording starts
+    private var scanMetadata: ScanMetadata?
+    private var hasRecordedInitialFrame = false
     
     private struct PointKey: Hashable {
         let x: Int32
@@ -65,6 +133,8 @@ class PointCloudRecorder {
             self?.pointKeys.removeAll(keepingCapacity: true)
             self?.vizPointKeys.removeAll(keepingCapacity: true)
             self?.frameCounter = 0
+            self?.scanMetadata = nil
+            self?.hasRecordedInitialFrame = false
         }
     }
     
@@ -72,6 +142,13 @@ class PointCloudRecorder {
         // Run on background thread to avoid freezing UI
         queue.async { [weak self] in
             guard let self = self else { return }
+            
+            // Capture initial frame metadata (camera orientation when scan started)
+            if !self.hasRecordedInitialFrame {
+                self.captureInitialMetadata(from: frame)
+                self.hasRecordedInitialFrame = true
+            }
+            
             self.frameCounter += 1
             if self.frameCounter % self.frameSkip != 0 { return }
             
@@ -260,15 +337,27 @@ class PointCloudRecorder {
             let dateFormatter = DateFormatter()
             dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
             let timestamp = dateFormatter.string(from: Date())
-            let fileName = "PointCloud_\(timestamp).ply"
+            let plyFileName = "PointCloud_\(timestamp).ply"
+            let metaFileName = "PointCloud_\(timestamp).meta.json"
             
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let url = docs.appendingPathComponent(fileName)
+            let plyURL = docs.appendingPathComponent(plyFileName)
+            let metaURL = docs.appendingPathComponent(metaFileName)
             
             do {
-                try fileContent.write(to: url, atomically: true, encoding: .ascii)
-                print("✅ Saved PLY to: \(url.path)")
+                // Save PLY file
+                try fileContent.write(to: plyURL, atomically: true, encoding: .ascii)
+                print("✅ Saved PLY to: \(plyURL.path)")
                 print("✅ Total points: \(self.points.count)")
+                
+                // Save metadata JSON
+                if let metadata = self.scanMetadata {
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = .prettyPrinted
+                    let metaData = try encoder.encode(metadata)
+                    try metaData.write(to: metaURL)
+                    print("✅ Saved metadata to: \(metaURL.path)")
+                }
                 
                 // List documents folder
                 let contents = try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil)
@@ -277,11 +366,69 @@ class PointCloudRecorder {
                     print("   - \(file.lastPathComponent)")
                 }
                 
-                DispatchQueue.main.async { completion(url) }
+                DispatchQueue.main.async { completion(plyURL) }
             } catch {
                 print("❌ Error saving PLY: \(error)")
                 DispatchQueue.main.async { completion(nil) }
             }
         }
+    }
+    
+    /// Capture the camera orientation and crosshair point when recording starts
+    private func captureInitialMetadata(from frame: ARFrame) {
+        let cameraTransform = frame.camera.transform
+        
+        // Extract camera position (translation component)
+        let cameraPosition = SIMD3<Float>(
+            cameraTransform.columns.3.x,
+            cameraTransform.columns.3.y,
+            cameraTransform.columns.3.z
+        )
+        
+        // Extract camera orientation vectors from the transform matrix
+        // Column 0 = Right vector, Column 1 = Up vector, Column 2 = Forward (looking direction is -Z)
+        let rightVector = SIMD3<Float>(
+            cameraTransform.columns.0.x,
+            cameraTransform.columns.0.y,
+            cameraTransform.columns.0.z
+        )
+        let upVector = SIMD3<Float>(
+            cameraTransform.columns.1.x,
+            cameraTransform.columns.1.y,
+            cameraTransform.columns.1.z
+        )
+        // Camera looks down -Z axis, so forward = negative of column 2
+        let forwardVector = SIMD3<Float>(
+            -cameraTransform.columns.2.x,
+            -cameraTransform.columns.2.y,
+            -cameraTransform.columns.2.z
+        )
+        
+        // Calculate crosshair point: a point 1 meter in front of camera center
+        // This represents where the user was looking when they started the scan
+        let crosshairPoint = cameraPosition + forwardVector * 1.0
+        
+        // Flatten the 4x4 transform matrix for JSON storage
+        let transformArray: [Float] = [
+            cameraTransform.columns.0.x, cameraTransform.columns.0.y, cameraTransform.columns.0.z, cameraTransform.columns.0.w,
+            cameraTransform.columns.1.x, cameraTransform.columns.1.y, cameraTransform.columns.1.z, cameraTransform.columns.1.w,
+            cameraTransform.columns.2.x, cameraTransform.columns.2.y, cameraTransform.columns.2.z, cameraTransform.columns.2.w,
+            cameraTransform.columns.3.x, cameraTransform.columns.3.y, cameraTransform.columns.3.z, cameraTransform.columns.3.w
+        ]
+        
+        scanMetadata = ScanMetadata(
+            recorderPosition: cameraPosition,
+            crosshairPoint: crosshairPoint,
+            upVector: upVector,
+            forwardVector: forwardVector,
+            rightVector: rightVector,
+            initialCameraTransform: transformArray
+        )
+        
+        print("📷 Captured initial scan metadata:")
+        print("   Position: \(cameraPosition)")
+        print("   Looking at: \(crosshairPoint)")
+        print("   Forward: \(forwardVector)")
+        print("   Up: \(upVector)")
     }
 }

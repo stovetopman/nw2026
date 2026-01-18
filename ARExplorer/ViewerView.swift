@@ -118,11 +118,18 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         var pointCloudCenter: SIMD3<Float> = .zero
         var pointCloudBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
         
+        // Scan metadata for proper orientation
+        var scanMetadata: ScanMetadata?
+        
         // Motion manager for immersive mode
         var motionManager: CMMotionManager?
         var displayLink: CADisplayLink?
         var initialAttitude: CMAttitude?
         var currentViewMode: ViewerMode = .immersive
+        
+        // Base orientation from metadata (applied before device motion)
+        var baseYaw: Float = 0
+        var basePitch: Float = 0
         
         // Gesture recognizers for overview mode
         var panGesture: UIPanGestureRecognizer?
@@ -202,6 +209,81 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             cameraNode.look(at: SCNVector3(center.x, center.y, center.z))
         }
         
+        /// Calculate initial orientation from scan metadata, or fallback to point cloud center
+        /// Returns the target point to look at (relative to origin)
+        func calculateLookAtTarget() -> SCNVector3 {
+            // If we have scan metadata, use the recorded forward direction
+            if let metadata = scanMetadata {
+                // Forward vector gives us the direction the camera was facing
+                // We want to look in that direction from origin
+                let forward = metadata.forwardVectorSIMD
+                
+                // Target is a point in the forward direction from origin
+                let target = SCNVector3(forward.x, forward.y, forward.z)
+                print("📷 Using metadata forward vector as target: \(forward)")
+                return target
+            }
+            
+            // Fallback: Look at point cloud center
+            let center = pointCloudCenter
+            
+            // If center is basically at origin, look forward (-Z direction)
+            guard simd_length(center) > 0.01 else {
+                return SCNVector3(0, 0, -1)
+            }
+            
+            print("📷 Fallback: looking at point cloud center: \(center)")
+            return SCNVector3(center.x, center.y, center.z)
+        }
+        
+        /// Apply initial orientation to camera using the recorded camera transform
+        func applyInitialOrientation(to cameraNode: SCNNode) {
+            // Position camera slightly back from origin for better view of points
+            // The scan was made at origin, so we pull back a bit to see more context
+            let pullBackDistance: Float = 0.7  // 0.5 meters back from origin
+            
+            // If we have metadata with the original camera transform, use it directly
+            if let metadata = scanMetadata {
+                let forward = metadata.forwardVectorSIMD
+                let up = metadata.upVectorSIMD
+                
+                // Position camera pulled back along the opposite of forward direction
+                let backDirection = -simd_normalize(forward)
+                cameraNode.position = SCNVector3(
+                    backDirection.x * pullBackDistance,
+                    backDirection.y * pullBackDistance,
+                    backDirection.z * pullBackDistance
+                )
+                
+                // Calculate look-at target (in the forward direction from new position)
+                let target = SCNVector3(forward.x, forward.y, forward.z)
+                
+                // Use the recorded up vector for proper orientation
+                cameraNode.look(at: target, up: SCNVector3(up.x, up.y, up.z), localFront: SCNVector3(0, 0, -1))
+                
+                print("📷 Applied metadata orientation:")
+                print("   Forward: \(forward)")
+                print("   Up: \(up)")
+                print("   Camera position: \(cameraNode.position)")
+            } else {
+                // Fallback: look at point cloud center, pull back from it
+                let target = calculateLookAtTarget()
+                let dir = simd_normalize(SIMD3<Float>(target.x, target.y, target.z))
+                cameraNode.position = SCNVector3(
+                    -dir.x * pullBackDistance,
+                    -dir.y * pullBackDistance,
+                    -dir.z * pullBackDistance
+                )
+                cameraNode.look(at: target, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
+            }
+            
+            // Store the resulting euler angles as base orientation for motion tracking
+            baseYaw = cameraNode.eulerAngles.y
+            basePitch = cameraNode.eulerAngles.x
+            
+            print("📷 Camera euler angles - Pitch: \(basePitch * 180 / .pi)°, Yaw: \(baseYaw * 180 / .pi)°")
+        }
+        
         func startMotionUpdates() {
             guard motionManager == nil else { return }
             
@@ -237,31 +319,61 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                   let motion = motionManager?.deviceMotion,
                   let cameraNode = cameraNode else { return }
             
-            // Get device orientation and apply to camera
+            // Get device orientation
             let attitude = motion.attitude
             
-            // If we have an initial attitude, use relative orientation
+            // Get RELATIVE rotation by removing initial attitude
+            // This gives us the delta rotation since motion tracking started
             if let initial = initialAttitude {
                 attitude.multiply(byInverseOf: initial)
             }
             
-            // Convert device rotation to camera orientation
-            // Phone held vertically: pitch controls looking up/down, yaw controls left/right
-            let pitch = Float(attitude.pitch)  // Looking up/down
-            let yaw = Float(attitude.yaw)      // Looking left/right
-            let roll = Float(attitude.roll)    // Head tilt
+            // Convert CMQuaternion to simd quaternion
+            // This is now Identity (no rotation) at start, representing "change since start"
+            let q = attitude.quaternion
+            let deviceQuat = simd_quatf(ix: Float(q.x), iy: Float(q.y), iz: Float(q.z), r: Float(q.w))
             
-            // Apply rotation - adjust for how phone is typically held
-            cameraNode.eulerAngles = SCNVector3(
-                -pitch + .pi / 2,  // Compensate for phone being vertical
-                yaw,
-                -roll
-            )
+            // Base orientation from scan metadata (the correct starting orientation)
+            // This was set by applyInitialOrientation using look(at:)
+            let baseQuat = simd_quatf(angle: baseYaw, axis: SIMD3<Float>(0, 1, 0)) *
+                           simd_quatf(angle: basePitch, axis: SIMD3<Float>(1, 0, 0))
+            
+            // Combine: base orientation * relative device rotation
+            // Since deviceQuat is RELATIVE (delta from start), we don't need any
+            // static axis-swapping transform like phoneToCamera
+            let finalQuat = baseQuat * deviceQuat
+            
+            // Apply to camera
+            cameraNode.simdOrientation = finalQuat
         }
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
+    }
+    
+    /// Load scan metadata from JSON file alongside the PLY
+    private func loadMetadata(for plyURL: URL) -> ScanMetadata? {
+        // Metadata file has same name as PLY but with .meta.json extension
+        let metaFileName = plyURL.deletingPathExtension().lastPathComponent + ".meta.json"
+        let metaURL = plyURL.deletingLastPathComponent().appendingPathComponent(metaFileName)
+        
+        guard FileManager.default.fileExists(atPath: metaURL.path) else {
+            print("📄 No metadata file found at: \(metaURL.path)")
+            return nil
+        }
+        
+        do {
+            let data = try Data(contentsOf: metaURL)
+            let metadata = try JSONDecoder().decode(ScanMetadata.self, from: data)
+            print("📄 Loaded scan metadata:")
+            print("   Forward: \(metadata.forwardVectorSIMD)")
+            print("   Up: \(metadata.upVectorSIMD)")
+            return metadata
+        } catch {
+            print("❌ Failed to load metadata: \(error)")
+            return nil
+        }
     }
 
     func makeUIView(context: Context) -> SCNView {
@@ -313,7 +425,10 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                     self.loadingProgress = "Reading PLY file..."
                 }
                 
-                let points = try PLYPointCloud.read(from: plyURL)
+                // Load scan metadata if available
+                let metadata = self.loadMetadata(for: self.plyURL)
+                
+                let points = try PLYPointCloud.read(from: self.plyURL)
                 
                 DispatchQueue.main.async {
                     self.loadingProgress = "Processing \(formatPointCount(points.count)) points..."
@@ -330,14 +445,14 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                     context.coordinator.pointNode = node
                     context.coordinator.pointCloudCenter = center
                     context.coordinator.pointCloudBounds = bounds
+                    context.coordinator.scanMetadata = metadata
                     
                     // Publish center to viewerCoordinator for note overlay
                     self.viewerCoordinator.pointCloudCenter = center
                     self.viewerCoordinator.isReady = true
                     
-                    // Start in immersive mode at origin
-                    cameraNode.position = SCNVector3(0, 0, 0)
-                    cameraNode.eulerAngles = SCNVector3Zero
+                    // Apply initial orientation from metadata using look(at:)
+                    context.coordinator.applyInitialOrientation(to: cameraNode)
                     
                     // Start motion tracking for immersive mode
                     context.coordinator.startMotionUpdates()
@@ -373,10 +488,10 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             // Remove overview gestures
             context.coordinator.removeOverviewGestures(from: uiView)
             
-            // Reset camera to origin with no rotation
+            // Reset camera to origin, facing the recorded direction from metadata
             if let cameraNode = context.coordinator.cameraNode {
-                cameraNode.position = SCNVector3(0, 0, 0)
-                cameraNode.eulerAngles = SCNVector3Zero
+                // Re-apply orientation using the stored metadata
+                context.coordinator.applyInitialOrientation(to: cameraNode)
             }
             
             // Reset point node position and rotation  
