@@ -87,28 +87,53 @@ extension ARProcessor: ARSessionDelegate {
             viewportSize: imageSize
         )
         
-        // Process mesh anchors with THIS frame's camera data
+        // Collect anchors to process
+        var anchorsToProcess: [(ARMeshAnchor, Int)] = []
         for anchor in frame.anchors {
             guard let meshAnchor = anchor as? ARMeshAnchor else { continue }
             
-            // Version tracking: compute simple hash of vertex buffer
             let geometry = meshAnchor.geometry
             let bufferHash = computeBufferHash(geometry.vertices)
             let anchorID = meshAnchor.identifier
             
             if let lastHash = processedAnchorHashes[anchorID], lastHash == bufferHash {
-                continue // Skip unchanged mesh
+                continue
             }
             processedAnchorHashes[anchorID] = bufferHash
+            anchorsToProcess.append((meshAnchor, bufferHash))
+        }
+        
+        guard !anchorsToProcess.isEmpty else { return }
+        
+        // Process on background queue to avoid blocking AR rendering
+        let viewMatrix = frame.camera.viewMatrix(for: .portrait)
+        let projectionMatrix = frame.camera.projectionMatrix(
+            for: .portrait,
+            viewportSize: imageSize,
+            zNear: 0.001,
+            zFar: 1000
+        )
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
             
-            // Extract points with temporally-synchronized color
-            let points = extractPoints(
-                from: meshAnchor,
-                frame: frame,
-                displayTransform: displayTransform,
-                imageSize: imageSize
-            )
-            pointManager.addPoints(points)
+            var allPoints: [ColoredPoint] = []
+            
+            for (meshAnchor, _) in anchorsToProcess {
+                let points = self.extractPoints(
+                    from: meshAnchor,
+                    pixelBuffer: pixelBuffer,
+                    viewMatrix: viewMatrix,
+                    projectionMatrix: projectionMatrix,
+                    displayTransform: displayTransform,
+                    imageSize: imageSize
+                )
+                allPoints.append(contentsOf: points)
+            }
+            
+            DispatchQueue.main.async {
+                pointManager.addPoints(allPoints)
+            }
         }
     }
     
@@ -143,10 +168,12 @@ extension ARProcessor: ARSessionDelegate {
 
 extension ARProcessor {
     
-    /// Extract colored points using displayTransform for accurate projection
+    /// Extract colored points using camera intrinsics for accurate projection
     private func extractPoints(
         from meshAnchor: ARMeshAnchor,
-        frame: ARFrame,
+        pixelBuffer: CVPixelBuffer,
+        viewMatrix: simd_float4x4,
+        projectionMatrix: simd_float4x4,
         displayTransform: CGAffineTransform,
         imageSize: CGSize
     ) -> [ColoredPoint] {
@@ -158,19 +185,8 @@ extension ARProcessor {
         let vertexBuffer = vertices.buffer.contents()
         let vertexStride = vertices.stride
         
-        let pixelBuffer = frame.capturedImage
         let imageWidth = Int(imageSize.width)
         let imageHeight = Int(imageSize.height)
-        
-        // View and projection matrices for this frame
-        let viewMatrix = frame.camera.viewMatrix(for: .portrait)
-        let projectionMatrix = frame.camera.projectionMatrix(
-            for: .portrait,
-            viewportSize: imageSize,
-            zNear: 0.001,
-            zFar: 1000
-        )
-        let viewProjection = projectionMatrix * viewMatrix
         
         // Lock pixel buffer
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
@@ -179,50 +195,64 @@ extension ARProcessor {
         var points: [ColoredPoint] = []
         points.reserveCapacity(vertexCount)
         
-        for i in 0..<vertexCount {
+        // Batch autoreleasepool every 1000 vertices for efficiency
+        let batchSize = 1000
+        for batchStart in stride(from: 0, to: vertexCount, by: batchSize) {
             autoreleasepool {
-                let vertexPointer = vertexBuffer.advanced(by: i * vertexStride)
-                let localPosition = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                
-                // Transform to world space
-                let localPos4 = SIMD4<Float>(localPosition.x, localPosition.y, localPosition.z, 1.0)
-                let worldPos4 = modelMatrix * localPos4
-                let worldPosition = SIMD3<Float>(worldPos4.x, worldPos4.y, worldPos4.z)
-                
-                // Project to clip space
-                let clipPos = viewProjection * worldPos4
-                
-                // Skip points behind camera
-                guard clipPos.w > 0.001 else {
-                    points.append(ColoredPoint(position: worldPosition, color: SIMD3<UInt8>(180, 170, 160)))
-                    return
+                let batchEnd = min(batchStart + batchSize, vertexCount)
+                for i in batchStart..<batchEnd {
+                    let vertexPointer = vertexBuffer.advanced(by: i * vertexStride)
+                    let localPosition = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                    
+                    // Transform to world space
+                    let localPos4 = SIMD4<Float>(localPosition.x, localPosition.y, localPosition.z, 1.0)
+                    let worldPos4 = modelMatrix * localPos4
+                    let worldPosition = SIMD3<Float>(worldPos4.x, worldPos4.y, worldPos4.z)
+                    
+                    // Transform to camera space
+                    let cameraPos4 = viewMatrix * worldPos4
+                    let cameraPos = SIMD3<Float>(cameraPos4.x, cameraPos4.y, cameraPos4.z)
+                    
+                    // Skip points behind camera (camera looks down -Z)
+                    guard cameraPos.z < -0.001 else {
+                        points.append(ColoredPoint(position: worldPosition, color: SIMD3<UInt8>(180, 170, 160)))
+                        continue
+                    }
+                    
+                    // Project using projection matrix
+                    let clipPos = projectionMatrix * cameraPos4
+                    
+                    // Normalized device coordinates (-1 to 1)
+                    let ndcX = clipPos.x / clipPos.w
+                    let ndcY = clipPos.y / clipPos.w
+                    
+                    // Convert NDC to normalized image coords (0 to 1)
+                    // Note: Camera image is in landscape-left orientation
+                    // NDC Y is up, image Y is down
+                    let normX = (ndcX + 1.0) * 0.5
+                    let normY = (1.0 - ndcY) * 0.5
+                    
+                    // Apply displayTransform to go from normalized display to normalized image
+                    // displayTransform maps image -> display, so we need inverse
+                    let invTransform = displayTransform.inverted()
+                    let displayPoint = CGPoint(x: CGFloat(normX), y: CGFloat(normY))
+                    let imagePoint = displayPoint.applying(invTransform)
+                    
+                    // Convert to pixel coordinates in the raw camera image
+                    let pixelX = Int(imagePoint.x * CGFloat(imageWidth))
+                    let pixelY = Int(imagePoint.y * CGFloat(imageHeight))
+                    
+                    // Clamp and sample
+                    let clampedX = max(0, min(imageWidth - 1, pixelX))
+                    let clampedY = max(0, min(imageHeight - 1, pixelY))
+                    
+                    // Clamp and sample
+                    let clampedX = max(0, min(imageWidth - 1, pixelX))
+                    let clampedY = max(0, min(imageHeight - 1, pixelY))
+                    
+                    let color = samplePixel(pixelBuffer: pixelBuffer, x: clampedX, y: clampedY)
+                    points.append(ColoredPoint(position: worldPosition, color: color))
                 }
-                
-                // Normalized device coordinates (-1 to 1)
-                let ndc = SIMD3<Float>(
-                    clipPos.x / clipPos.w,
-                    clipPos.y / clipPos.w,
-                    clipPos.z / clipPos.w
-                )
-                
-                // Convert to normalized image coordinates (0 to 1)
-                let normalizedX = (ndc.x + 1.0) * 0.5
-                let normalizedY = (1.0 - ndc.y) * 0.5  // Flip Y for image coords
-                
-                // Apply display transform for orientation correction
-                let normalizedPoint = CGPoint(x: CGFloat(normalizedX), y: CGFloat(normalizedY))
-                let transformedPoint = normalizedPoint.applying(displayTransform)
-                
-                // Convert to pixel coordinates
-                let pixelX = Int(transformedPoint.x * CGFloat(imageWidth - 1))
-                let pixelY = Int(transformedPoint.y * CGFloat(imageHeight - 1))
-                
-                // Clamp and sample
-                let clampedX = max(0, min(imageWidth - 1, pixelX))
-                let clampedY = max(0, min(imageHeight - 1, pixelY))
-                
-                let color = samplePixel(pixelBuffer: pixelBuffer, x: clampedX, y: clampedY)
-                points.append(ColoredPoint(position: worldPosition, color: color))
             }
         }
         

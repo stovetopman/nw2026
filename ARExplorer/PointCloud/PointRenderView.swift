@@ -165,6 +165,9 @@ struct PointCloudRealityView: UIViewRepresentable {
         private var lastMeshBuildTime: Date = .distantPast
         private let meshRebuildInterval: TimeInterval = 1.0
         
+        // Cached material to avoid expensive shader recompilation
+        private var cachedMaterial: RealityKit.Material?
+        
         func setupGestures(for view: ARView) {
             let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan))
             let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch))
@@ -224,20 +227,33 @@ struct PointCloudRealityView: UIViewRepresentable {
                 return
             }
             
-            // Build mesh on background thread
-            Task {
-                if let mesh = await buildLowLevelMesh(from: points) {
-                    await MainActor.run {
-                        var material = UnlitMaterial()
-                        material.color = .init(tint: .white)
-                        entity.components.set(ModelComponent(mesh: mesh, materials: [material]))
+            // Build mesh on main actor (LowLevelMesh requires it)
+            Task { @MainActor in
+                if let mesh = buildLowLevelMesh(from: points) {
+                    // Use cached material or create once
+                    if cachedMaterial == nil {
+                        cachedMaterial = (try? await createVertexColorMaterial()) ?? UnlitMaterial()
                     }
+                    entity.components.set(ModelComponent(mesh: mesh, materials: [cachedMaterial!]))
                 }
             }
         }
         
+        /// Create a CustomMaterial that reads vertex colors
+        @MainActor
+        private func createVertexColorMaterial() async throws -> CustomMaterial {
+            let surfaceShader = CustomMaterial.SurfaceShader(
+                named: "vertexColorSurface",
+                in: MetalLibLoader.library
+            )
+            var material = try CustomMaterial(surfaceShader: surfaceShader, lightingModel: .unlit)
+            material.faceCulling = CustomMaterial.FaceCulling.none
+            return material
+        }
+        
         /// Build LowLevelMesh with .point topology and packed RGBA colors
-        private func buildLowLevelMesh(from points: [ColoredPoint]) async -> MeshResource? {
+        @MainActor
+        private func buildLowLevelMesh(from points: [ColoredPoint]) -> MeshResource? {
             guard #available(iOS 18.0, *) else { return nil }
             
             let vertexCount = points.count
@@ -267,7 +283,8 @@ struct PointCloudRealityView: UIViewRepresentable {
                 descriptor.vertexAttributes = attributes
                 descriptor.vertexLayouts = [layout]
                 descriptor.vertexCapacity = vertexCount
-                descriptor.indexCapacity = 0  // Point topology - no indices
+                descriptor.indexCapacity = vertexCount  // Point topology needs indices
+                descriptor.indexType = .uint32
                 
                 let mesh = try LowLevelMesh(descriptor: descriptor)
                 
@@ -279,6 +296,14 @@ struct PointCloudRealityView: UIViewRepresentable {
                             position: points[i].position,
                             color: points[i].color
                         )
+                    }
+                }
+                
+                // Fill index buffer (sequential indices for point topology)
+                mesh.withUnsafeMutableIndices { buffer in
+                    let indices = buffer.bindMemory(to: UInt32.self)
+                    for i in 0..<vertexCount {
+                        indices[i] = UInt32(i)
                     }
                 }
                 
