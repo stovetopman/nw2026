@@ -161,9 +161,9 @@ struct PointCloudRealityView: UIViewRepresentable {
         private var lastPointCount = 0
         private var cachedMesh: MeshResource?
         
-        // Throttle mesh rebuilds to 1Hz to reduce GPU memory pressure
+        // Throttle mesh rebuilds to 2Hz for responsive updates
         private var lastMeshBuildTime: Date = .distantPast
-        private let meshRebuildInterval: TimeInterval = 1.0
+        private let meshRebuildInterval: TimeInterval = 0.5
         
         // Cached material to avoid expensive shader recompilation
         private var cachedMaterial: RealityKit.Material?

@@ -28,20 +28,20 @@ final class PointManager: ObservableObject {
     
     // MARK: - Memory Management
     
-    /// Maximum points to prevent memory exhaustion (500K × 16 bytes ≈ 8MB)
-    private let maxPoints = 500_000
+    /// Maximum points to prevent memory exhaustion (2M × 16 bytes ≈ 32MB)
+    private let maxPoints = 2_000_000
     
     // MARK: - Voxel Filter
     
-    /// Set of occupied voxel keys (1.5mm resolution for balanced density/performance)
+    /// Set of occupied voxel keys (0.5mm resolution for high density)
     private var occupiedVoxels: Set<SIMD3<Int32>> = []
     
-    /// Convert world position to voxel key (1.5mm = 0.0015m, so multiply by 666)
+    /// Convert world position to voxel key (0.5mm = 0.0005m, so multiply by 2000)
     private func voxelKey(for position: SIMD3<Float>) -> SIMD3<Int32> {
         return SIMD3<Int32>(
-            Int32(round(position.x * 666)),
-            Int32(round(position.y * 666)),
-            Int32(round(position.z * 666))
+            Int32(round(position.x * 2000)),
+            Int32(round(position.y * 2000)),
+            Int32(round(position.z * 2000))
         )
     }
     
@@ -66,17 +66,32 @@ final class PointManager: ObservableObject {
         return true
     }
     
-    /// Add multiple points, filtering duplicates.
+    /// Add multiple points, filtering duplicates efficiently.
     func addPoints(_ newPoints: [ColoredPoint]) {
-        for point in newPoints {
-            addPoint(point)
+        // Pre-reserve capacity if needed
+        let remaining = maxPoints - points.count
+        guard remaining > 0 else { return }
+        
+        // Reserve additional capacity for efficiency
+        if points.capacity < points.count + min(newPoints.count, remaining) {
+            points.reserveCapacity(points.count + min(newPoints.count, remaining))
         }
+        
+        for point in newPoints {
+            guard points.count < maxPoints else { break }
+            let key = voxelKey(for: point.position)
+            if !occupiedVoxels.contains(key) {
+                occupiedVoxels.insert(key)
+                points.append(point)
+            }
+        }
+        uniqueCount = points.count
     }
     
     /// Clear all points.
     func clear() {
-        points.removeAll()
-        occupiedVoxels.removeAll()
+        points.removeAll(keepingCapacity: true)  // Keep capacity for reuse
+        occupiedVoxels.removeAll(keepingCapacity: true)
         uniqueCount = 0
     }
     

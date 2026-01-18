@@ -25,9 +25,9 @@ final class ARProcessor: NSObject, ObservableObject {
     /// AR Session
     private var session: ARSession?
     
-    /// Throttling: Process every 100ms to prevent thermal throttling
+    /// Throttling: Process every 50ms (20Hz) for higher density
     private var lastProcessTime: TimeInterval = 0
-    private let processInterval: TimeInterval = 0.1
+    private let processInterval: TimeInterval = 0.05
     
     /// Version tracking: Skip unchanged meshes using buffer hash
     private var processedAnchorHashes: [UUID: Int] = [:]
