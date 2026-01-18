@@ -7,23 +7,23 @@ import ARKit
 
 // View mode enum
 enum ViewerMode: String, CaseIterable {
-    case immersive = "Immersive"
+    case birdview = "Birdview"
     case overview = "Overview"
-    case ar = "AR"
+    case immersive = "Immersive"
     
     var icon: String {
         switch self {
-        case .immersive: return "person.fill"
+        case .birdview: return "person.fill"
         case .overview: return "eye.fill"
-        case .ar: return "arkit"
+        case .immersive: return "arkit"
         }
     }
     
     var next: ViewerMode {
         switch self {
-        case .immersive: return .overview
-        case .overview: return .ar
-        case .ar: return .immersive
+        case .birdview: return .overview
+        case .overview: return .immersive
+        case .immersive: return .birdview
         }
     }
     
@@ -37,7 +37,7 @@ struct ViewerView: View {
     @ObservedObject var viewerCoordinator: NoteViewerCoordinator
     @State private var isLoading = true
     @State private var loadingProgress: String = "Reading file..."
-    @State private var viewMode: ViewerMode = .immersive
+    @State private var viewMode: ViewerMode = .birdview
 
     var body: some View {
         ZStack {
@@ -86,7 +86,7 @@ struct ViewerView: View {
             .padding(.vertical, 10)
             .background(
                 Capsule()
-                    .fill(viewMode == .ar ? Color.orange.opacity(0.8) : Color.blue.opacity(0.8))
+                    .fill(viewMode == .immersive ? Color.orange.opacity(0.8) : Color.blue.opacity(0.8))
                     .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
             )
         }
@@ -142,17 +142,17 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         // Scan metadata for proper orientation
         var scanMetadata: ScanMetadata?
         
-        // Motion manager for immersive mode
+        // Motion manager for birdview mode
         var motionManager: CMMotionManager?
         var displayLink: CADisplayLink?
         var initialAttitude: CMAttitude?
-        var currentViewMode: ViewerMode = .immersive
+        var currentViewMode: ViewerMode = .birdview
         
         // Base orientation from metadata (applied before device motion)
         var baseYaw: Float = 0
         var basePitch: Float = 0
         
-        // Position tracking for immersive mode
+        // Position tracking for birdview mode
         var basePosition: SIMD3<Float> = .zero  // Current camera position
         var velocity: SIMD3<Float> = .zero      // Current camera velocity (for future smoothing)
         
@@ -516,7 +516,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         }
         
         @objc func updateMotion() {
-            guard currentViewMode == .immersive,
+            guard currentViewMode == .birdview,
                   let motion = motionManager?.deviceMotion,
                   let cameraNode = cameraNode else { return }
             
@@ -608,13 +608,13 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         scnView.backgroundColor = UIColor(red: 0.1, green: 0.1, blue: 0.15, alpha: 1.0)
         scnView.autoenablesDefaultLighting = false
         
-        // Start in immersive mode - no gesture control, device motion controls view
+        // Start in birdview mode - no gesture control, device motion controls view
         scnView.allowsCameraControl = false
-        context.coordinator.currentViewMode = .immersive
+        context.coordinator.currentViewMode = .birdview
         
         // Sync initial view mode to NoteViewerCoordinator
         DispatchQueue.main.async {
-            self.viewerCoordinator.currentViewMode = .immersive
+            self.viewerCoordinator.currentViewMode = .birdview
         }
         
         // Add ambient light
@@ -740,7 +740,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
               let arView = context.coordinator.arView else { return }
         
         switch viewMode {
-        case .immersive:
+        case .birdview:
             // Show SCNView, hide ARSCNView
             scnView.isHidden = false
             arView.isHidden = true
@@ -748,7 +748,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             // Stop AR session
             context.coordinator.stopARSession()
             
-            // Immersive mode: camera at origin, device motion controls
+            // Birdview mode: camera at origin, device motion controls
             scnView.allowsCameraControl = false
             
             // Remove overview gestures
@@ -811,7 +811,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             // Setup custom gesture recognizers
             context.coordinator.setupOverviewGestures(for: scnView)
             
-        case .ar:
+        case .immersive:
             // Hide SCNView, show ARSCNView
             scnView.isHidden = true
             arView.isHidden = false
@@ -826,7 +826,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             context.coordinator.setupARPointCloud()
             context.coordinator.startARSession()
             
-            print("🔮 Switched to AR mode - walk around to explore the point cloud!")
+            print("🔮 Switched to Immersive mode - walk around to explore the point cloud!")
         }
     }
 
@@ -841,8 +841,8 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         let currentMode = context.coordinator.currentViewMode
         
         switch currentMode {
-        case .immersive:
-            // In immersive mode, return camera to origin where the scanner stood
+        case .birdview:
+            // In birdview mode, return camera to origin where the scanner stood
             cameraNode.position = SCNVector3(0, 0, 0)
             cameraNode.eulerAngles = SCNVector3Zero
             
@@ -865,8 +865,8 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                 cameraNode.look(at: SCNVector3(center.x, center.y, center.z))
             }
             
-        case .ar:
-            // In AR mode, reset the AR point cloud to origin
+        case .immersive:
+            // In immersive mode, reset the AR point cloud to origin
             if let arPointNode = context.coordinator.arPointNode {
                 arPointNode.position = SCNVector3Zero
                 arPointNode.eulerAngles = SCNVector3Zero

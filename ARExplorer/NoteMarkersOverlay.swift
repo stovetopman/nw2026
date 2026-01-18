@@ -89,15 +89,15 @@ class NoteViewerCoordinator: ObservableObject {
     @Published var pointCloudCenter: SIMD3<Float> = .zero
     @Published var isReady: Bool = false
     
-    /// The note that the crosshair is currently hovering over (immersive mode)
+    /// The note that the crosshair is currently hovering over (birdview mode)
     @Published var crosshairFocusedNoteID: UUID? = nil
     
-    /// Current view mode (immersive vs overview)
-    @Published var currentViewMode: ViewerMode = .immersive
+    /// Current view mode (birdview vs overview vs immersive)
+    @Published var currentViewMode: ViewerMode = .birdview
     
     /// Check if a note is near the center of the screen (crosshair proximity)
     func updateCrosshairFocus(notes: [SpatialNote], centerThreshold: CGFloat = 60) {
-        guard let scnView = scnView, currentViewMode == .immersive else {
+        guard let scnView = scnView, currentViewMode == .birdview else {
             crosshairFocusedNoteID = nil
             return
         }

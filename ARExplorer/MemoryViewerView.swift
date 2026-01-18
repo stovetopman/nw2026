@@ -38,8 +38,8 @@ struct MemoryViewerView: View {
                 ViewerView(plyURL: item.plyURL, viewerCoordinator: viewerCoordinator)
                     .ignoresSafeArea()
                 
-                // Note markers overlay (shows yellow dots for notes)
-                if viewerCoordinator.isReady && !isPlacingNote {
+                // Note markers overlay (shows yellow dots for notes) - NOT in Immersive mode
+                if viewerCoordinator.isReady && !isPlacingNote && viewerCoordinator.currentViewMode != .immersive {
                     NoteMarkersOverlay(
                         notes: noteStore.notes,
                         scnView: viewerCoordinator.scnView,
@@ -47,36 +47,36 @@ struct MemoryViewerView: View {
                         selectedNoteID: $selectedNoteID
                     )
                     .ignoresSafeArea()
-                    .allowsHitTesting(!isPlacingNote && viewerCoordinator.currentViewMode != .immersive)
+                    .allowsHitTesting(!isPlacingNote && viewerCoordinator.currentViewMode != .birdview)
                 }
                 
-                // Crosshair for immersive mode
-                if viewerCoordinator.currentViewMode == .immersive && !isPlacingNote && editingNote == nil {
+                // Crosshair for birdview mode (NOT in Immersive mode)
+                if viewerCoordinator.currentViewMode == .birdview && !isPlacingNote && editingNote == nil {
                     crosshairView
                 }
                 
-                // Placement mode overlay
-                if isPlacingNote {
+                // Placement mode overlay (NOT in Immersive mode)
+                if isPlacingNote && viewerCoordinator.currentViewMode != .immersive {
                     placementOverlay
                 }
                 
-                // Show note card when crosshair focuses on a note (immersive mode)
-                if viewerCoordinator.currentViewMode == .immersive,
+                // Show note card when crosshair focuses on a note (birdview mode only, NOT Immersive)
+                if viewerCoordinator.currentViewMode == .birdview,
                    !isPlacingNote,
                    let focusedID = viewerCoordinator.crosshairFocusedNoteID,
                    let focusedNote = noteStore.notes.first(where: { $0.id == focusedID }) {
-                    immersiveNoteCard(note: focusedNote)
+                    birdviewNoteCard(note: focusedNote)
                 }
                 
-                // Selected note card (overview mode, tapped selection)
-                if viewerCoordinator.currentViewMode != .immersive,
+                // Selected note card (overview mode only, NOT Immersive or birdview)
+                if viewerCoordinator.currentViewMode == .overview,
                    !isPlacingNote,
                    let selectedNote = noteStore.notes.first(where: { $0.id == selectedNoteID }) {
                     selectedNoteOverlay(note: selectedNote)
                 }
                 
-                // Edit note overlay
-                if let note = editingNote {
+                // Edit note overlay (NOT in Immersive mode)
+                if let note = editingNote, viewerCoordinator.currentViewMode != .immersive {
                     editNoteOverlay(note: note)
                 }
 
@@ -297,7 +297,7 @@ struct MemoryViewerView: View {
                         )
                     }
 
-                    if !noteStore.notes.isEmpty {
+                    if !noteStore.notes.isEmpty && viewerCoordinator.currentViewMode != .immersive {
                         HStack(spacing: 4) {
                             Image(systemName: "note.text")
                                 .font(.system(size: 10, weight: .bold))
@@ -369,16 +369,19 @@ struct MemoryViewerView: View {
                     )
                 }
                 
-                Button(action: startPlacingNote) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(AppTheme.ink)
-                        .frame(width: 52, height: 52)
-                        .background(
-                            Circle()
-                                .fill(AppTheme.accentYellow)
-                                .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
-                        )
+                // Hide add note button in Immersive mode
+                if viewerCoordinator.currentViewMode != .immersive {
+                    Button(action: startPlacingNote) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundColor(AppTheme.ink)
+                            .frame(width: 52, height: 52)
+                            .background(
+                                Circle()
+                                    .fill(AppTheme.accentYellow)
+                                    .overlay(Circle().stroke(AppTheme.ink, lineWidth: 2))
+                            )
+                    }
                 }
             }
             .padding(.horizontal, 20)
@@ -485,9 +488,9 @@ struct MemoryViewerView: View {
         .allowsHitTesting(false)
     }
     
-    // MARK: - Immersive Note Card (when crosshair focuses on a note)
+    // MARK: - Birdview Note Card (when crosshair focuses on a note)
     
-    private func immersiveNoteCard(note: SpatialNote) -> some View {
+    private func birdviewNoteCard(note: SpatialNote) -> some View {
         VStack {
             Spacer()
             
