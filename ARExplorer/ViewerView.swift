@@ -124,8 +124,82 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         var initialAttitude: CMAttitude?
         var currentViewMode: ViewerMode = .immersive
         
+        // Gesture recognizers for overview mode
+        var panGesture: UIPanGestureRecognizer?
+        var pinchGesture: UIPinchGestureRecognizer?
+        var orbitAngleX: Float = 0
+        var orbitAngleY: Float = 0.5  // Start looking slightly down
+        var orbitDistance: Float = 3.0
+        
         deinit {
             stopMotionUpdates()
+        }
+        
+        func setupOverviewGestures(for view: SCNView) {
+            // Remove existing gestures if any
+            removeOverviewGestures(from: view)
+            
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+            view.addGestureRecognizer(pan)
+            panGesture = pan
+            
+            let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+            view.addGestureRecognizer(pinch)
+            pinchGesture = pinch
+        }
+        
+        func removeOverviewGestures(from view: SCNView) {
+            if let pan = panGesture {
+                view.removeGestureRecognizer(pan)
+                panGesture = nil
+            }
+            if let pinch = pinchGesture {
+                view.removeGestureRecognizer(pinch)
+                pinchGesture = nil
+            }
+        }
+        
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            guard currentViewMode == .overview else { return }
+            
+            let translation = gesture.translation(in: gesture.view)
+            
+            // Rotate around the point cloud
+            orbitAngleX += Float(translation.x) * 0.005
+            orbitAngleY += Float(translation.y) * 0.005
+            
+            // Clamp vertical angle to avoid flipping
+            orbitAngleY = max(-Float.pi * 0.4, min(Float.pi * 0.4, orbitAngleY))
+            
+            updateOverviewCamera()
+            
+            gesture.setTranslation(.zero, in: gesture.view)
+        }
+        
+        @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            guard currentViewMode == .overview else { return }
+            
+            if gesture.state == .changed {
+                orbitDistance /= Float(gesture.scale)
+                orbitDistance = max(0.5, min(20.0, orbitDistance))  // Clamp distance
+                gesture.scale = 1.0
+                
+                updateOverviewCamera()
+            }
+        }
+        
+        func updateOverviewCamera() {
+            guard let cameraNode = cameraNode else { return }
+            
+            let center = pointCloudCenter
+            
+            // Calculate camera position on a sphere around the center
+            let x = center.x + orbitDistance * cos(orbitAngleY) * sin(orbitAngleX)
+            let y = center.y + orbitDistance * sin(orbitAngleY)
+            let z = center.z + orbitDistance * cos(orbitAngleY) * cos(orbitAngleX)
+            
+            cameraNode.position = SCNVector3(x, y, z)
+            cameraNode.look(at: SCNVector3(center.x, center.y, center.z))
         }
         
         func startMotionUpdates() {
@@ -296,65 +370,58 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             // Immersive mode: camera at origin, device motion controls
             uiView.allowsCameraControl = false
             
-            // Reset camera to origin
+            // Remove overview gestures
+            context.coordinator.removeOverviewGestures(from: uiView)
+            
+            // Reset camera to origin with no rotation
             if let cameraNode = context.coordinator.cameraNode {
-                SCNTransaction.begin()
-                SCNTransaction.animationDuration = 0.5
                 cameraNode.position = SCNVector3(0, 0, 0)
                 cameraNode.eulerAngles = SCNVector3Zero
-                SCNTransaction.commit()
             }
             
-            // Reset point node position
+            // Reset point node position and rotation  
             if let pointNode = context.coordinator.pointNode {
-                SCNTransaction.begin()
-                SCNTransaction.animationDuration = 0.5
                 pointNode.position = SCNVector3Zero
                 pointNode.eulerAngles = SCNVector3Zero
-                SCNTransaction.commit()
             }
             
-            // Start motion tracking
-            context.coordinator.startMotionUpdates()
+            // Force the SCNView to use our camera node
+            uiView.pointOfView = context.coordinator.cameraNode
+            
+            // Start motion tracking with fresh initial attitude
+            context.coordinator.stopMotionUpdates()  // Stop first to reset
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                context.coordinator.startMotionUpdates()
+            }
             
         case .overview:
-            // Overview mode: camera above, gesture controls
-            uiView.allowsCameraControl = true
-            uiView.defaultCameraController.interactionMode = .orbitTurntable
-            uiView.defaultCameraController.inertiaEnabled = true
+            // Overview mode: camera orbits around point cloud with gesture controls
+            uiView.allowsCameraControl = false  // We handle gestures ourselves
             
-            // Stop motion tracking
+            // Stop motion tracking first
             context.coordinator.stopMotionUpdates()
             
-            // Position camera above and looking at center
-            if let cameraNode = context.coordinator.cameraNode,
-               let bounds = context.coordinator.pointCloudBounds {
+            // Setup initial orbit parameters based on bounds
+            if let bounds = context.coordinator.pointCloudBounds {
                 let center = context.coordinator.pointCloudCenter
-                
-                // Calculate a good viewing distance based on bounds
                 let size = bounds.max - bounds.min
                 let maxDimension = max(size.x, max(size.y, size.z))
-                let distance = maxDimension * 1.5 + 1.0  // Add some margin
                 
-                SCNTransaction.begin()
-                SCNTransaction.animationDuration = 0.5
+                // Set initial orbit distance and angles
+                context.coordinator.orbitDistance = maxDimension * 1.5 + 1.0
+                context.coordinator.orbitAngleX = 0
+                context.coordinator.orbitAngleY = 0.5  // Looking slightly down
+                context.coordinator.pointCloudCenter = center
                 
-                // Position camera above and back from center, looking down at an angle
-                cameraNode.position = SCNVector3(
-                    center.x,
-                    center.y + distance * 0.6,  // Above
-                    center.z + distance * 0.8   // Behind
-                )
-                
-                // Look at center
-                let lookAt = SCNVector3(center.x, center.y, center.z)
-                cameraNode.look(at: lookAt)
-                
-                SCNTransaction.commit()
-                
-                // Set orbit target to center
-                uiView.defaultCameraController.target = lookAt
+                // Update camera position
+                context.coordinator.updateOverviewCamera()
             }
+            
+            // Ensure our camera is the point of view
+            uiView.pointOfView = context.coordinator.cameraNode
+            
+            // Setup custom gesture recognizers
+            context.coordinator.setupOverviewGestures(for: uiView)
         }
     }
 
