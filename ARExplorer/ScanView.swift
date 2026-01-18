@@ -14,6 +14,11 @@ struct ScanView: View {
     @State private var userSetDistance: Float = 1.0
     @State private var confidenceThreshold: ConfidenceThreshold = .medium
     @State private var showConfidencePicker = false
+    
+    // Post-scan note adding
+    @State private var showPostScanNote = false
+    @State private var savedPLYURL: URL? = nil
+    @State private var savedFolderURL: URL? = nil
 
     var body: some View {
         ZStack {
@@ -65,6 +70,28 @@ struct ScanView: View {
             if let stats = notification.object as? ScanStats {
                 pointCount = stats.pointCount
                 // Don't overwrite user's distance setting
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .scanSaved)) { notification in
+            // When scan is saved, show the post-scan note view
+            if let url = notification.object as? URL {
+                savedPLYURL = url
+                savedFolderURL = url.deletingLastPathComponent()
+                showPostScanNote = true
+            }
+        }
+        .fullScreenCover(isPresented: $showPostScanNote) {
+            if let plyURL = savedPLYURL,
+               let folderURL = savedFolderURL {
+                PostScanNoteView(
+                    plyURL: plyURL,
+                    folderURL: folderURL,
+                    noteStore: NoteStore(folderURL: folderURL),
+                    onDone: {
+                        showPostScanNote = false
+                        store.refresh()
+                    }
+                )
             }
         }
     }
@@ -205,7 +232,7 @@ struct ScanView: View {
                 
                 Slider(value: $userSetDistance, in: 0.5...5.0, step: 0.5)
                     .tint(AppTheme.accentBlue)
-                    .onChange(of: userSetDistance) { newValue in
+                    .onChange(of: userSetDistance) { oldValue, newValue in
                         NotificationCenter.default.post(name: .updateScanDistance, object: newValue)
                     }
                 

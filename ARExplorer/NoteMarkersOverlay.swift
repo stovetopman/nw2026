@@ -88,4 +88,44 @@ class NoteViewerCoordinator: ObservableObject {
     @Published var scnView: SCNView?
     @Published var pointCloudCenter: SIMD3<Float> = .zero
     @Published var isReady: Bool = false
+    
+    /// The note that the crosshair is currently hovering over (immersive mode)
+    @Published var crosshairFocusedNoteID: UUID? = nil
+    
+    /// Current view mode (immersive vs overview)
+    @Published var currentViewMode: ViewerMode = .immersive
+    
+    /// Check if a note is near the center of the screen (crosshair proximity)
+    func updateCrosshairFocus(notes: [SpatialNote], centerThreshold: CGFloat = 60) {
+        guard let scnView = scnView, currentViewMode == .immersive else {
+            crosshairFocusedNoteID = nil
+            return
+        }
+        
+        let screenCenter = CGPoint(x: scnView.bounds.midX, y: scnView.bounds.midY)
+        var closestNoteID: UUID? = nil
+        var minDistance: CGFloat = centerThreshold
+        
+        for note in notes {
+            // Note positions are stored in world coords, need to adjust for point cloud centering
+            // In ViewerView we keep original coords (no centering), so use position directly
+            let scnPos = SCNVector3(note.position.x, note.position.y, note.position.z)
+            let projected = scnView.projectPoint(scnPos)
+            
+            // Skip points behind camera
+            if projected.z >= 1 || projected.z < 0 { continue }
+            
+            let screenPoint = CGPoint(x: CGFloat(projected.x), y: CGFloat(projected.y))
+            let distance = hypot(screenPoint.x - screenCenter.x, screenPoint.y - screenCenter.y)
+            
+            if distance < minDistance {
+                minDistance = distance
+                closestNoteID = note.id
+            }
+        }
+        
+        if crosshairFocusedNoteID != closestNoteID {
+            crosshairFocusedNoteID = closestNoteID
+        }
+    }
 }

@@ -612,6 +612,11 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         scnView.allowsCameraControl = false
         context.coordinator.currentViewMode = .immersive
         
+        // Sync initial view mode to NoteViewerCoordinator
+        DispatchQueue.main.async {
+            self.viewerCoordinator.currentViewMode = .immersive
+        }
+        
         // Add ambient light
         let ambientLight = SCNLight()
         ambientLight.type = .ambient
@@ -724,6 +729,11 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         guard context.coordinator.currentViewMode != viewMode else { return }
         
         context.coordinator.currentViewMode = viewMode
+        
+        // Sync view mode to NoteViewerCoordinator for UI overlays
+        DispatchQueue.main.async {
+            self.viewerCoordinator.currentViewMode = viewMode
+        }
         
         // Get the views from coordinator
         guard let scnView = context.coordinator.scnView,

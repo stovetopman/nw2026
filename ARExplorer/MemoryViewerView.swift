@@ -22,6 +22,9 @@ struct MemoryViewerView: View {
     @State private var editingNote: SpatialNote?
     @State private var editText = ""
     
+    // Timer for crosshair focus tracking
+    @State private var focusTimer: Timer?
+    
     init(item: MemoryItem, onClose: @escaping () -> Void) {
         self.item = item
         self.onClose = onClose
@@ -35,7 +38,7 @@ struct MemoryViewerView: View {
                 ViewerView(plyURL: item.plyURL, viewerCoordinator: viewerCoordinator)
                     .ignoresSafeArea()
                 
-                // Note markers overlay
+                // Note markers overlay (shows yellow dots for notes)
                 if viewerCoordinator.isReady && !isPlacingNote {
                     NoteMarkersOverlay(
                         notes: noteStore.notes,
@@ -44,7 +47,12 @@ struct MemoryViewerView: View {
                         selectedNoteID: $selectedNoteID
                     )
                     .ignoresSafeArea()
-                    .allowsHitTesting(!isPlacingNote)
+                    .allowsHitTesting(!isPlacingNote && viewerCoordinator.currentViewMode != .immersive)
+                }
+                
+                // Crosshair for immersive mode
+                if viewerCoordinator.currentViewMode == .immersive && !isPlacingNote && editingNote == nil {
+                    crosshairView
                 }
                 
                 // Placement mode overlay
@@ -52,8 +60,18 @@ struct MemoryViewerView: View {
                     placementOverlay
                 }
                 
-                // Selected note card
-                if !isPlacingNote, let selectedNote = noteStore.notes.first(where: { $0.id == selectedNoteID }) {
+                // Show note card when crosshair focuses on a note (immersive mode)
+                if viewerCoordinator.currentViewMode == .immersive,
+                   !isPlacingNote,
+                   let focusedID = viewerCoordinator.crosshairFocusedNoteID,
+                   let focusedNote = noteStore.notes.first(where: { $0.id == focusedID }) {
+                    immersiveNoteCard(note: focusedNote)
+                }
+                
+                // Selected note card (overview mode, tapped selection)
+                if viewerCoordinator.currentViewMode != .immersive,
+                   !isPlacingNote,
+                   let selectedNote = noteStore.notes.first(where: { $0.id == selectedNoteID }) {
                     selectedNoteOverlay(note: selectedNote)
                 }
                 
@@ -71,6 +89,26 @@ struct MemoryViewerView: View {
         .sheet(isPresented: $showShare) {
             ShareSheet(items: [item.plyURL])
         }
+        .onAppear {
+            startFocusTimer()
+        }
+        .onDisappear {
+            stopFocusTimer()
+        }
+    }
+    
+    // MARK: - Focus Timer
+    
+    private func startFocusTimer() {
+        focusTimer?.invalidate()
+        focusTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
+            viewerCoordinator.updateCrosshairFocus(notes: noteStore.notes)
+        }
+    }
+    
+    private func stopFocusTimer() {
+        focusTimer?.invalidate()
+        focusTimer = nil
     }
     
     // MARK: - Placement Overlay
@@ -394,5 +432,76 @@ struct MemoryViewerView: View {
 
     private func recenter() {
         NotificationCenter.default.post(name: .viewerRecenter, object: nil)
+    }
+    
+    // MARK: - Crosshair View (Immersive Mode)
+    
+    private var crosshairView: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                // Simple crosshair
+                ZStack {
+                    // Horizontal line
+                    Rectangle()
+                        .fill(Color.white)
+                        .frame(width: 24, height: 2)
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                    // Vertical line
+                    Rectangle()
+                        .fill(Color.white)
+                        .frame(width: 2, height: 24)
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                    // Center dot
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 4, height: 4)
+                        .shadow(color: .black.opacity(0.5), radius: 1)
+                }
+                Spacer()
+            }
+            Spacer()
+        }
+        .allowsHitTesting(false)
+    }
+    
+    // MARK: - Immersive Note Card (when crosshair focuses on a note)
+    
+    private func immersiveNoteCard(note: SpatialNote) -> some View {
+        VStack {
+            Spacer()
+            
+            // Note card appears at bottom of screen
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "bubble.left.fill")
+                        .foregroundColor(AppTheme.accentYellow)
+                    Text(note.author)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(AppTheme.ink)
+                    Spacer()
+                    Text(note.date, style: .relative)
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.ink.opacity(0.6))
+                }
+                
+                Text(note.text)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(AppTheme.ink)
+                    .lineLimit(3)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+            )
+            .padding(.horizontal, 20)
+            .padding(.bottom, 120)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(.spring(response: 0.3), value: note.id)
+        }
+        .allowsHitTesting(false)
     }
 }
