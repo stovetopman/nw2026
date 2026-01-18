@@ -1,5 +1,6 @@
 import SwiftUI
 import ARKit
+import AVFoundation
 import simd
 
 struct ScanView: View {
@@ -28,6 +29,9 @@ struct ScanView: View {
     @State private var showNameInput = false
     @State private var memoryName = ""
     @State private var nameError: String? = nil
+    
+    // Flashlight
+    @State private var isFlashlightOn = false
 
     var body: some View {
         ZStack {
@@ -401,14 +405,14 @@ struct ScanView: View {
             }
             
             HStack(spacing: 18) {
-                Button(action: capturePhoto) {
-                    Image(systemName: "bolt.fill")
+                Button(action: toggleFlashlight) {
+                    Image(systemName: isFlashlightOn ? "bolt.fill" : "bolt.slash.fill")
                         .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(AppTheme.ink)
+                        .foregroundColor(isFlashlightOn ? AppTheme.accentYellow : AppTheme.ink)
                         .frame(width: 54, height: 54)
                         .background(
                             Circle()
-                                .fill(Color.white.opacity(0.9))
+                                .fill(isFlashlightOn ? AppTheme.ink : Color.white.opacity(0.9))
                                 .overlay(
                                     Circle()
                                         .stroke(AppTheme.ink, lineWidth: 2)
@@ -517,6 +521,29 @@ struct ScanView: View {
 
     private func capturePhoto() {
         NotificationCenter.default.post(name: .capturePhoto, object: nil)
+    }
+    
+    private func toggleFlashlight() {
+        guard let device = AVCaptureDevice.default(for: .video),
+              device.hasTorch else {
+            print("❌ Torch not available on this device")
+            return
+        }
+        
+        do {
+            try device.lockForConfiguration()
+            
+            if isFlashlightOn {
+                device.torchMode = .off
+            } else {
+                try device.setTorchModeOn(level: 1.0)
+            }
+            
+            device.unlockForConfiguration()
+            isFlashlightOn.toggle()
+        } catch {
+            print("❌ Failed to toggle flashlight: \(error)")
+        }
     }
     
     // MARK: - Crosshair
