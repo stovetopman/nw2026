@@ -116,9 +116,10 @@ struct NoteCardView: View {
         Color.gray.opacity(0.5)
         NoteCardView(
             note: SpatialNote(
+                anchorID: UUID(),
                 text: "I used to sleep here...",
                 author: "alex_m",
-                position: .zero
+                transform: matrix_identity_float4x4
             ),
             onEdit: {},
             onDelete: {}
