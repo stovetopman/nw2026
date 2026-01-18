@@ -11,10 +11,10 @@ struct ScanView: View {
     @State private var isRecording = false
     @State private var scanMode: ScanMode = .point
     @State private var pointCount: Int = 0
-    @State private var scanDistance: Float = 1.0
+    @State private var scanDistance: Float = 3.5
     @State private var showDistanceSlider = false
-    @State private var userSetDistance: Float = 1.0
-    @State private var confidenceThreshold: ConfidenceThreshold = .medium
+    @State private var userSetDistance: Float = 3.5
+    @State private var confidenceThreshold: ConfidenceThreshold = .high
     @State private var showConfidencePicker = false
     
     // Live note adding during scan
@@ -55,7 +55,6 @@ struct ScanView: View {
                 }
 
                 scanFrame
-                modePicker
 
                 Spacer()
 
