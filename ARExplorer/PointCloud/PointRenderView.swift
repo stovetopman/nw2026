@@ -10,6 +10,14 @@ import RealityKit
 import Metal
 import simd
 
+// MARK: - Point Vertex Layout
+
+/// Vertex layout for point cloud: position + color
+struct PointVertex {
+    var position: SIMD3<Float>
+    var color: SIMD3<Float>  // RGB normalized 0-1
+}
+
 // MARK: - Point Render View
 
 /// Renders point cloud using RealityKit LowLevelMesh.
@@ -178,7 +186,7 @@ struct PointCloudRealityView: View {
         do {
             let mesh = try createPointMesh(from: points)
             
-            // Create simple unlit material
+            // Create simple unlit material with vertex colors
             var material = UnlitMaterial()
             material.color = .init(tint: .white)
             
@@ -190,28 +198,89 @@ struct PointCloudRealityView: View {
         }
     }
     
+    @available(iOS 18.0, *)
     private func createPointMesh(from points: [ColoredPoint]) throws -> MeshResource {
-        // Create mesh descriptor with positions and colors
-        var descriptor = MeshDescriptor(name: "PointCloud")
-        
-        // Positions
-        var positions: [SIMD3<Float>] = []
-        positions.reserveCapacity(points.count)
-        for point in points {
-            positions.append(point.position)
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw MeshError.noMetalDevice
         }
-        descriptor.positions = MeshBuffer(positions)
         
-        // Point primitives (each vertex is a point)
-        var indices: [UInt32] = []
-        indices.reserveCapacity(points.count)
-        for i in 0..<points.count {
-            indices.append(UInt32(i))
+        let vertexCount = points.count
+        
+        // Define vertex attributes: position + color
+        var attributes: [LowLevelMesh.Attribute] = []
+        attributes.append(LowLevelMesh.Attribute(
+            semantic: .position,
+            format: .float3,
+            offset: 0
+        ))
+        attributes.append(LowLevelMesh.Attribute(
+            semantic: .color,
+            format: .float3,
+            offset: MemoryLayout<SIMD3<Float>>.stride
+        ))
+        
+        // Vertex layout
+        let vertexLayout = LowLevelMesh.Layout(
+            bufferIndex: 0,
+            bufferStride: MemoryLayout<PointVertex>.stride
+        )
+        
+        // Create mesh descriptor
+        var descriptor = LowLevelMesh.Descriptor()
+        descriptor.vertexAttributes = attributes
+        descriptor.vertexLayouts = [vertexLayout]
+        descriptor.vertexCapacity = vertexCount
+        descriptor.indexCapacity = 0  // Points don't need indices
+        
+        // Create mesh
+        let mesh = try LowLevelMesh(descriptor: descriptor)
+        
+        // Fill vertex buffer
+        mesh.withUnsafeMutableBytes(bufferIndex: 0) { buffer in
+            let vertices = buffer.bindMemory(to: PointVertex.self)
+            for i in 0..<vertexCount {
+                let point = points[i]
+                vertices[i] = PointVertex(
+                    position: point.position,
+                    color: SIMD3<Float>(
+                        Float(point.color.x) / 255.0,
+                        Float(point.color.y) / 255.0,
+                        Float(point.color.z) / 255.0
+                    )
+                )
+            }
         }
-        descriptor.primitives = .points(indices)
         
-        return try MeshResource.generate(from: [descriptor])
+        // Create part with point topology
+        let part = LowLevelMesh.Part(
+            indexCount: vertexCount,
+            topology: .point,
+            bounds: computeBounds(points: points)
+        )
+        mesh.parts.replaceAll([part])
+        
+        return try MeshResource(from: mesh)
     }
+    
+    private func computeBounds(points: [ColoredPoint]) -> BoundingBox {
+        guard let first = points.first else {
+            return BoundingBox(min: .zero, max: .zero)
+        }
+        
+        var minP = first.position
+        var maxP = first.position
+        
+        for point in points {
+            minP = min(minP, point.position)
+            maxP = max(maxP, point.position)
+        }
+        
+        return BoundingBox(min: minP, max: maxP)
+    }
+}
+
+enum MeshError: Error {
+    case noMetalDevice
 }
 
 // MARK: - Preview
