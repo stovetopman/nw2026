@@ -27,6 +27,12 @@ struct ContentView: View {
                         showViewer = latestUSDZ != nil
                     }
                     .buttonStyle(.bordered)
+                    
+                    Button("Clear Map") {
+                        NotificationCenter.default.post(name: .clearMap, object: nil)
+                    }
+                    .buttonStyle(.bordered)
+
                 }
                 .padding()
                 .background(.ultraThinMaterial)
@@ -47,4 +53,5 @@ struct ContentView: View {
 extension Notification.Name {
     static let capturePhoto = Notification.Name("capturePhoto")
     static let saveScan = Notification.Name("saveScan")
+    static let clearMap = Notification.Name("clearMap")
 }

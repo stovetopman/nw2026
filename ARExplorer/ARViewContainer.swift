@@ -35,9 +35,40 @@ struct ARViewContainer: UIViewRepresentable {
                     meshAnchors[m.identifier] = m
                 }
             }
+            
         }
 
         // MARK: - Actions
+        
+        func clearMap() {
+            guard let arView else { return }
+
+            // Clear stored anchors used for export
+            meshAnchors.removeAll()
+
+            // Restart reconstruction so the mesh resets
+            let config = ARWorldTrackingConfiguration()
+            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+                config.sceneReconstruction = .mesh
+            }
+            config.environmentTexturing = .automatic
+
+            arView.session.run(
+                config,
+                options: [
+                    .removeExistingAnchors,
+                    .resetSceneReconstruction
+                    // add .resetTracking if you want a "hard" reset
+                ]
+            )
+
+            // Optional: start a fresh folder/session
+            currentSpaceFolder = try? ScanStorage.makeNewSpaceFolder()
+            photoIndex = 0
+
+            print("Cleared map / reset reconstruction")
+        }
+
 
         func capturePhoto() {
             guard let arView,
@@ -134,6 +165,10 @@ struct ARViewContainer: UIViewRepresentable {
         NotificationCenter.default.addObserver(forName: .saveScan, object: nil, queue: .main) { _ in
             context.coordinator.saveUSDZ()
         }
+        NotificationCenter.default.addObserver(forName: .clearMap, object: nil, queue: .main) { _ in
+            context.coordinator.clearMap()
+        }
+
 
         return arView
     }
