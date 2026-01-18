@@ -3,17 +3,32 @@ import SceneKit
 import UIKit
 import simd
 import CoreMotion
+import ARKit
 
 // View mode enum
 enum ViewerMode: String, CaseIterable {
     case immersive = "Immersive"
     case overview = "Overview"
+    case ar = "AR"
     
     var icon: String {
         switch self {
         case .immersive: return "person.fill"
         case .overview: return "eye.fill"
+        case .ar: return "arkit"
         }
+    }
+    
+    var next: ViewerMode {
+        switch self {
+        case .immersive: return .overview
+        case .overview: return .ar
+        case .ar: return .immersive
+        }
+    }
+    
+    var nextLabel: String {
+        return next.rawValue
     }
 }
 
@@ -57,13 +72,13 @@ struct ViewerView: View {
     private var viewModeButton: some View {
         Button(action: {
             withAnimation(.easeInOut(duration: 0.3)) {
-                viewMode = viewMode == .immersive ? .overview : .immersive
+                viewMode = viewMode.next
             }
         }) {
             HStack(spacing: 8) {
-                Image(systemName: viewMode == .immersive ? "eye.fill" : "person.fill")
+                Image(systemName: viewMode.next.icon)
                     .font(.system(size: 16, weight: .semibold))
-                Text(viewMode == .immersive ? "Overview" : "Immersive")
+                Text(viewMode.nextLabel)
                     .font(.system(size: 14, weight: .medium))
             }
             .foregroundColor(.white)
@@ -71,7 +86,7 @@ struct ViewerView: View {
             .padding(.vertical, 10)
             .background(
                 Capsule()
-                    .fill(Color.blue.opacity(0.8))
+                    .fill(viewMode == .ar ? Color.orange.opacity(0.8) : Color.blue.opacity(0.8))
                     .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
             )
         }
@@ -111,12 +126,18 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
     var viewerCoordinator: NoteViewerCoordinator
     @Binding var viewMode: ViewerMode
 
-    final class Coordinator {
+    final class Coordinator: NSObject, ARSessionDelegate {
         weak var scnView: SCNView?
+        weak var arView: ARSCNView?
+        weak var containerView: UIView?
         var pointNode: SCNNode?
+        var arPointNode: SCNNode?  // Separate node for AR scene
         var cameraNode: SCNNode?
         var pointCloudCenter: SIMD3<Float> = .zero
         var pointCloudBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+        
+        // Store loaded points for reuse
+        var loadedPoints: [PLYPoint] = []
         
         // Scan metadata for proper orientation
         var scanMetadata: ScanMetadata?
@@ -131,6 +152,15 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         var baseYaw: Float = 0
         var basePitch: Float = 0
         
+        // Position tracking for immersive mode
+        var basePosition: SIMD3<Float> = .zero  // Current camera position
+        var velocity: SIMD3<Float> = .zero      // Current camera velocity (for future smoothing)
+        
+        // Pedometer for walking detection
+        var pedometer: CMPedometer?
+        var lastStepCount: Int = 0
+        var stepDistance: Float = 0.3  // How far to move per step (in meters)
+        
         // Gesture recognizers for overview mode
         var panGesture: UIPanGestureRecognizer?
         var pinchGesture: UIPinchGestureRecognizer?
@@ -138,8 +168,127 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         var orbitAngleY: Float = 0.5  // Start looking slightly down
         var orbitDistance: Float = 3.0
         
+        // AR Session
+        var arSession: ARSession?
+        
         deinit {
             stopMotionUpdates()
+            stopARSession()
+        }
+        
+        // MARK: - AR Session Management
+        
+        func startARSession() {
+            guard let arView = arView else { return }
+            
+            let configuration = ARWorldTrackingConfiguration()
+            configuration.planeDetection = []  // No plane detection needed
+            configuration.environmentTexturing = .none
+            
+            arSession = arView.session
+            arView.session.delegate = self
+            arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            
+            print("🔮 AR Session started")
+        }
+        
+        func stopARSession() {
+            arSession?.pause()
+            arSession = nil
+            print("🔮 AR Session stopped")
+        }
+        
+        func setupARPointCloud() {
+            guard let arView = arView, !loadedPoints.isEmpty else { return }
+            
+            // Remove existing AR point node
+            arPointNode?.removeFromParentNode()
+            
+            // Create point cloud geometry for AR
+            let (node, _, _) = makePointCloudNode(from: loadedPoints)
+            
+            // Add to AR scene at origin (where user starts)
+            arView.scene.rootNode.addChildNode(node)
+            arPointNode = node
+            
+            print("🔮 AR Point cloud added with \(loadedPoints.count) points")
+        }
+        
+        // Helper to create point cloud node (can be used by both SCN and AR)
+        func makePointCloudNode(from points: [PLYPoint]) -> (node: SCNNode, center: SIMD3<Float>, bounds: (min: SIMD3<Float>, max: SIMD3<Float>)) {
+            guard !points.isEmpty else {
+                return (SCNNode(), .zero, (min: .zero, max: .zero))
+            }
+
+            var minPoint = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+            var maxPoint = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+
+            for point in points {
+                minPoint = simd_min(minPoint, point.position)
+                maxPoint = simd_max(maxPoint, point.position)
+            }
+
+            let center = (minPoint + maxPoint) * 0.5
+
+            var positions: [Float] = []
+            var colors: [Float] = []
+            positions.reserveCapacity(points.count * 3)
+            colors.reserveCapacity(points.count * 4)
+
+            for point in points {
+                positions.append(point.position.x)
+                positions.append(point.position.y)
+                positions.append(point.position.z)
+
+                colors.append(Float(point.color.x) / 255.0)
+                colors.append(Float(point.color.y) / 255.0)
+                colors.append(Float(point.color.z) / 255.0)
+                colors.append(1.0)
+            }
+
+            let vertexData = positions.withUnsafeBufferPointer { Data(buffer: $0) }
+            let colorData = colors.withUnsafeBufferPointer { Data(buffer: $0) }
+
+            let vertexSource = SCNGeometrySource(
+                data: vertexData,
+                semantic: .vertex,
+                vectorCount: points.count,
+                usesFloatComponents: true,
+                componentsPerVector: 3,
+                bytesPerComponent: MemoryLayout<Float>.size,
+                dataOffset: 0,
+                dataStride: MemoryLayout<Float>.size * 3
+            )
+
+            let colorSource = SCNGeometrySource(
+                data: colorData,
+                semantic: .color,
+                vectorCount: points.count,
+                usesFloatComponents: true,
+                componentsPerVector: 4,
+                bytesPerComponent: MemoryLayout<Float>.size,
+                dataOffset: 0,
+                dataStride: MemoryLayout<Float>.size * 4
+            )
+
+            let element = SCNGeometryElement(
+                data: nil,
+                primitiveType: .point,
+                primitiveCount: points.count,
+                bytesPerIndex: 0
+            )
+            element.pointSize = 4.0
+            element.minimumPointScreenSpaceRadius = 2.0
+            element.maximumPointScreenSpaceRadius = 6.0
+
+            let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
+            let material = SCNMaterial()
+            material.lightingModel = .constant
+            material.isDoubleSided = true
+            material.diffuse.contents = UIColor.white
+            geometry.materials = [material]
+
+            return (SCNNode(geometry: geometry), center, (min: minPoint, max: maxPoint))
         }
         
         func setupOverviewGestures(for view: SCNView) {
@@ -249,11 +398,13 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                 
                 // Position camera pulled back along the opposite of forward direction
                 let backDirection = -simd_normalize(forward)
-                cameraNode.position = SCNVector3(
+                let startPos = SIMD3<Float>(
                     backDirection.x * pullBackDistance,
                     backDirection.y * pullBackDistance,
                     backDirection.z * pullBackDistance
                 )
+                cameraNode.simdPosition = startPos
+                basePosition = startPos  // Store for position tracking
                 
                 // Calculate look-at target (in the forward direction from new position)
                 let target = SCNVector3(forward.x, forward.y, forward.z)
@@ -264,18 +415,23 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                 print("📷 Applied metadata orientation:")
                 print("   Forward: \(forward)")
                 print("   Up: \(up)")
-                print("   Camera position: \(cameraNode.position)")
+                print("   Camera position: \(startPos)")
             } else {
                 // Fallback: look at point cloud center, pull back from it
                 let target = calculateLookAtTarget()
                 let dir = simd_normalize(SIMD3<Float>(target.x, target.y, target.z))
-                cameraNode.position = SCNVector3(
+                let startPos = SIMD3<Float>(
                     -dir.x * pullBackDistance,
                     -dir.y * pullBackDistance,
                     -dir.z * pullBackDistance
                 )
+                cameraNode.simdPosition = startPos
+                basePosition = startPos  // Store for position tracking
                 cameraNode.look(at: target, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
             }
+            
+            // Reset velocity when resetting position
+            velocity = .zero
             
             // Store the resulting euler angles as base orientation for motion tracking
             baseYaw = cameraNode.eulerAngles.y
@@ -304,6 +460,31 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                     self?.initialAttitude = self?.motionManager?.deviceMotion?.attitude
                 }
             }
+            
+            // Start pedometer for walking detection
+            if CMPedometer.isStepCountingAvailable() {
+                let ped = CMPedometer()
+                lastStepCount = 0
+                
+                ped.startUpdates(from: Date()) { [weak self] data, error in
+                    guard let self = self,
+                          let data = data,
+                          error == nil else { return }
+                    
+                    let currentSteps = data.numberOfSteps.intValue
+                    let newSteps = currentSteps - self.lastStepCount
+                    
+                    if newSteps > 0 {
+                        self.lastStepCount = currentSteps
+                        
+                        // Move forward in the direction the camera is facing
+                        DispatchQueue.main.async {
+                            self.moveForward(steps: newSteps)
+                        }
+                    }
+                }
+                pedometer = ped
+            }
         }
         
         func stopMotionUpdates() {
@@ -311,13 +492,35 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             displayLink = nil
             motionManager?.stopDeviceMotionUpdates()
             motionManager = nil
+            pedometer?.stopUpdates()
+            pedometer = nil
             initialAttitude = nil
+            lastStepCount = 0
+        }
+        
+        /// Move the camera forward based on number of steps taken
+        func moveForward(steps: Int) {
+            guard let cameraNode = cameraNode else { return }
+            
+            // Get the camera's forward direction (negative Z in local space)
+            let forward = cameraNode.simdWorldFront
+            
+            // Calculate movement distance
+            let distance = Float(steps) * stepDistance
+            
+            // Update position
+            basePosition += forward * distance
+            cameraNode.simdPosition = basePosition
+            
+            print("🚶 Moved \(steps) steps, distance: \(distance)m, new position: \(basePosition)")
         }
         
         @objc func updateMotion() {
             guard currentViewMode == .immersive,
                   let motion = motionManager?.deviceMotion,
                   let cameraNode = cameraNode else { return }
+            
+            // === ROTATION TRACKING ===
             
             // Get device orientation
             let attitude = motion.attitude
@@ -343,7 +546,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             // static axis-swapping transform like phoneToCamera
             let finalQuat = baseQuat * deviceQuat
             
-            // Apply to camera
+            // Apply rotation to camera (position is updated by pedometer when walking)
             cameraNode.simdOrientation = finalQuat
         }
     }
@@ -376,9 +579,24 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         }
     }
 
-    func makeUIView(context: Context) -> SCNView {
+    func makeUIView(context: Context) -> UIView {
+        // Create container view to hold both SCNView and ARSCNView
+        let containerView = UIView(frame: .zero)
+        containerView.backgroundColor = .black
+        context.coordinator.containerView = containerView
+        
+        // === Create SCNView for Immersive/Overview modes ===
         let scnView = SCNView(frame: .zero)
+        scnView.translatesAutoresizingMaskIntoConstraints = false
         context.coordinator.scnView = scnView
+        containerView.addSubview(scnView)
+        
+        NSLayoutConstraint.activate([
+            scnView.topAnchor.constraint(equalTo: containerView.topAnchor),
+            scnView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
+            scnView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            scnView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor)
+        ])
         
         // Publish to coordinator for note overlay access
         DispatchQueue.main.async {
@@ -414,6 +632,31 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         scene.rootNode.addChildNode(cameraNode)
         context.coordinator.cameraNode = cameraNode
         scnView.pointOfView = cameraNode
+        
+        // === Create ARSCNView for AR mode (hidden initially) ===
+        let arView = ARSCNView(frame: .zero)
+        arView.translatesAutoresizingMaskIntoConstraints = false
+        arView.isHidden = true
+        arView.automaticallyUpdatesLighting = false
+        arView.scene.background.contents = UIColor.black  // Black background, no camera feed
+        context.coordinator.arView = arView
+        containerView.addSubview(arView)
+        
+        NSLayoutConstraint.activate([
+            arView.topAnchor.constraint(equalTo: containerView.topAnchor),
+            arView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
+            arView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            arView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor)
+        ])
+        
+        // Add ambient light to AR scene
+        let arAmbientLight = SCNLight()
+        arAmbientLight.type = .ambient
+        arAmbientLight.intensity = 1000
+        arAmbientLight.color = UIColor.white
+        let arAmbientNode = SCNNode()
+        arAmbientNode.light = arAmbientLight
+        arView.scene.rootNode.addChildNode(arAmbientNode)
 
         NotificationCenter.default.addObserver(forName: .viewerRecenter, object: nil, queue: .main) { _ in
             recenter(context: context)
@@ -434,7 +677,8 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                     self.loadingProgress = "Processing \(formatPointCount(points.count)) points..."
                 }
                 
-                let (node, center, bounds) = self.makePointCloudNode(from: points)
+                // Use coordinator's method to create node
+                let (node, center, bounds) = context.coordinator.makePointCloudNode(from: points)
                 
                 DispatchQueue.main.async {
                     self.loadingProgress = "Rendering..."
@@ -445,6 +689,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                     context.coordinator.pointNode = node
                     context.coordinator.pointCloudCenter = center
                     context.coordinator.pointCloudBounds = bounds
+                    context.coordinator.loadedPoints = points  // Store for AR mode
                     context.coordinator.scanMetadata = metadata
                     
                     // Publish center to viewerCoordinator for note overlay
@@ -471,22 +716,33 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             }
         }
 
-        return scnView
+        return containerView
     }
 
-    func updateUIView(_ uiView: SCNView, context: Context) {
+    func updateUIView(_ uiView: UIView, context: Context) {
         // Handle view mode changes
         guard context.coordinator.currentViewMode != viewMode else { return }
         
         context.coordinator.currentViewMode = viewMode
         
+        // Get the views from coordinator
+        guard let scnView = context.coordinator.scnView,
+              let arView = context.coordinator.arView else { return }
+        
         switch viewMode {
         case .immersive:
+            // Show SCNView, hide ARSCNView
+            scnView.isHidden = false
+            arView.isHidden = true
+            
+            // Stop AR session
+            context.coordinator.stopARSession()
+            
             // Immersive mode: camera at origin, device motion controls
-            uiView.allowsCameraControl = false
+            scnView.allowsCameraControl = false
             
             // Remove overview gestures
-            context.coordinator.removeOverviewGestures(from: uiView)
+            context.coordinator.removeOverviewGestures(from: scnView)
             
             // Reset camera to origin, facing the recorded direction from metadata
             if let cameraNode = context.coordinator.cameraNode {
@@ -501,7 +757,7 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             }
             
             // Force the SCNView to use our camera node
-            uiView.pointOfView = context.coordinator.cameraNode
+            scnView.pointOfView = context.coordinator.cameraNode
             
             // Start motion tracking with fresh initial attitude
             context.coordinator.stopMotionUpdates()  // Stop first to reset
@@ -510,8 +766,15 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             }
             
         case .overview:
+            // Show SCNView, hide ARSCNView
+            scnView.isHidden = false
+            arView.isHidden = true
+            
+            // Stop AR session
+            context.coordinator.stopARSession()
+            
             // Overview mode: camera orbits around point cloud with gesture controls
-            uiView.allowsCameraControl = false  // We handle gestures ourselves
+            scnView.allowsCameraControl = false  // We handle gestures ourselves
             
             // Stop motion tracking first
             context.coordinator.stopMotionUpdates()
@@ -533,89 +796,28 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
             }
             
             // Ensure our camera is the point of view
-            uiView.pointOfView = context.coordinator.cameraNode
+            scnView.pointOfView = context.coordinator.cameraNode
             
             // Setup custom gesture recognizers
-            context.coordinator.setupOverviewGestures(for: uiView)
+            context.coordinator.setupOverviewGestures(for: scnView)
+            
+        case .ar:
+            // Hide SCNView, show ARSCNView
+            scnView.isHidden = true
+            arView.isHidden = false
+            
+            // Stop motion tracking (AR handles camera position/rotation)
+            context.coordinator.stopMotionUpdates()
+            
+            // Remove gestures from SCNView
+            context.coordinator.removeOverviewGestures(from: scnView)
+            
+            // Setup AR point cloud and start session
+            context.coordinator.setupARPointCloud()
+            context.coordinator.startARSession()
+            
+            print("🔮 Switched to AR mode - walk around to explore the point cloud!")
         }
-    }
-
-    private func makePointCloudNode(from points: [PLYPoint]) -> (node: SCNNode, center: SIMD3<Float>, bounds: (min: SIMD3<Float>, max: SIMD3<Float>)) {
-        guard !points.isEmpty else {
-            return (SCNNode(), .zero, (min: .zero, max: .zero))
-        }
-
-        var minPoint = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
-        var maxPoint = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
-
-        for point in points {
-            minPoint = simd_min(minPoint, point.position)
-            maxPoint = simd_max(maxPoint, point.position)
-        }
-
-        let center = (minPoint + maxPoint) * 0.5
-
-        var positions: [Float] = []
-        var colors: [Float] = []
-        positions.reserveCapacity(points.count * 3)
-        colors.reserveCapacity(points.count * 4)
-
-        for point in points {
-            // Keep original world coordinates - don't center
-            // This preserves the spatial relationship from the scan
-            positions.append(point.position.x)
-            positions.append(point.position.y)
-            positions.append(point.position.z)
-
-            colors.append(Float(point.color.x) / 255.0)
-            colors.append(Float(point.color.y) / 255.0)
-            colors.append(Float(point.color.z) / 255.0)
-            colors.append(1.0)
-        }
-
-        let vertexData = positions.withUnsafeBufferPointer { Data(buffer: $0) }
-        let colorData = colors.withUnsafeBufferPointer { Data(buffer: $0) }
-
-        let vertexSource = SCNGeometrySource(
-            data: vertexData,
-            semantic: .vertex,
-            vectorCount: points.count,
-            usesFloatComponents: true,
-            componentsPerVector: 3,
-            bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<Float>.size * 3
-        )
-
-        let colorSource = SCNGeometrySource(
-            data: colorData,
-            semantic: .color,
-            vectorCount: points.count,
-            usesFloatComponents: true,
-            componentsPerVector: 4,
-            bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<Float>.size * 4
-        )
-
-        let element = SCNGeometryElement(
-            data: nil,
-            primitiveType: .point,
-            primitiveCount: points.count,
-            bytesPerIndex: 0
-        )
-        element.pointSize = 4.0
-        element.minimumPointScreenSpaceRadius = 2.0
-        element.maximumPointScreenSpaceRadius = 6.0
-
-        let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.isDoubleSided = true
-        material.diffuse.contents = UIColor.white
-        geometry.materials = [material]
-
-        return (SCNNode(geometry: geometry), center, (min: minPoint, max: maxPoint))
     }
 
     private func recenter(context: Context) {
@@ -628,14 +830,16 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
         
         let currentMode = context.coordinator.currentViewMode
         
-        if currentMode == .immersive {
+        switch currentMode {
+        case .immersive:
             // In immersive mode, return camera to origin where the scanner stood
             cameraNode.position = SCNVector3(0, 0, 0)
             cameraNode.eulerAngles = SCNVector3Zero
             
             // Reset initial attitude for motion tracking
             context.coordinator.initialAttitude = context.coordinator.motionManager?.deviceMotion?.attitude
-        } else {
+            
+        case .overview:
             // In overview mode, reset to overview position
             if let bounds = context.coordinator.pointCloudBounds {
                 let center = context.coordinator.pointCloudCenter
@@ -650,6 +854,18 @@ struct ViewerPointCloudContainer: UIViewRepresentable {
                 )
                 cameraNode.look(at: SCNVector3(center.x, center.y, center.z))
             }
+            
+        case .ar:
+            // In AR mode, reset the AR point cloud to origin
+            if let arPointNode = context.coordinator.arPointNode {
+                arPointNode.position = SCNVector3Zero
+                arPointNode.eulerAngles = SCNVector3Zero
+            }
+            
+            // Restart AR session for fresh tracking
+            context.coordinator.stopARSession()
+            context.coordinator.setupARPointCloud()
+            context.coordinator.startARSession()
         }
     }
 }
