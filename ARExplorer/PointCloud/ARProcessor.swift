@@ -246,10 +246,6 @@ extension ARProcessor {
                     let clampedX = max(0, min(imageWidth - 1, pixelX))
                     let clampedY = max(0, min(imageHeight - 1, pixelY))
                     
-                    // Clamp and sample
-                    let clampedX = max(0, min(imageWidth - 1, pixelX))
-                    let clampedY = max(0, min(imageHeight - 1, pixelY))
-                    
                     let color = samplePixel(pixelBuffer: pixelBuffer, x: clampedX, y: clampedY)
                     points.append(ColoredPoint(position: worldPosition, color: color))
                 }
