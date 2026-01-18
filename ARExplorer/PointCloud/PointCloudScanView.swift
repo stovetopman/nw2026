@@ -22,24 +22,12 @@ struct PointCloudScanView: View {
     var body: some View {
         ZStack {
             if showViewer {
-                // Point cloud viewer (non-AR)
-                PointRenderView(pointManager: pointManager)
-                    .overlay(alignment: .topLeading) {
-                        Button(action: { showViewer = false }) {
-                            HStack {
-                                Image(systemName: "arrow.left")
-                                Text("Back to Scan")
-                            }
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                        }
-                        .padding()
-                    }
+                // Point cloud viewer (non-AR) with footer bar
+                PointRenderView(
+                    pointManager: pointManager,
+                    onReset: { pointManager.clear() },
+                    onBack: { showViewer = false }
+                )
             } else {
                 // AR scanning view
                 PointCloudARView(arProcessor: arProcessor, pointManager: pointManager)

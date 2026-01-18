@@ -3,6 +3,7 @@
 //  ARExplorer
 //
 //  RealityKit point cloud renderer using LowLevelMesh with .point topology.
+//  Renders full RGB color from captured camera image.
 //
 
 import SwiftUI
@@ -20,59 +21,86 @@ struct PointVertex {
 
 // MARK: - Point Render View
 
-/// Renders point cloud using RealityKit LowLevelMesh.
+/// Renders point cloud using RealityKit LowLevelMesh with full RGB colors.
 struct PointRenderView: View {
     
     @ObservedObject var pointManager: PointManager
+    var onReset: (() -> Void)? = nil
+    var onBack: (() -> Void)? = nil
     
     // Camera state
     @State private var cameraDistance: Float = 3.0
-    @State private var cameraAzimuth: Float = 0.0      // Horizontal rotation
-    @State private var cameraElevation: Float = 0.3   // Vertical rotation
+    @State private var cameraAzimuth: Float = 0.0
+    @State private var cameraElevation: Float = 0.3
     @State private var cameraTarget: SIMD3<Float> = .zero
     
     // Gesture state
     @State private var lastDragLocation: CGPoint?
-    @State private var lastPanLocation: CGPoint?
     @State private var lastScale: CGFloat = 1.0
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // RealityKit view
-                PointCloudRealityView(
-                    pointManager: pointManager,
-                    cameraDistance: cameraDistance,
-                    cameraAzimuth: cameraAzimuth,
-                    cameraElevation: cameraElevation,
-                    cameraTarget: cameraTarget
-                )
-                .gesture(orbitGesture)
-                .gesture(zoomGesture)
-                .gesture(panGesture)
+        ZStack {
+            // Full-screen point cloud view
+            PointCloudRealityView(
+                pointManager: pointManager,
+                cameraDistance: cameraDistance,
+                cameraAzimuth: cameraAzimuth,
+                cameraElevation: cameraElevation,
+                cameraTarget: cameraTarget
+            )
+            .gesture(dragGesture)
+            .gesture(magnifyGesture)
+            .ignoresSafeArea()
+            
+            // Minimal footer at bottom
+            VStack {
+                Spacer()
                 
-                // Point count overlay
-                VStack {
-                    HStack {
-                        Text("\(pointManager.uniqueCount) points")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.white)
-                            .padding(8)
-                            .background(.black.opacity(0.6))
-                            .cornerRadius(6)
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .padding()
+                footerBar
             }
         }
     }
     
+    // MARK: - Footer Bar
+    
+    private var footerBar: some View {
+        HStack {
+            // Back button (if provided)
+            if let onBack = onBack {
+                Button(action: onBack) {
+                    Image(systemName: "arrow.left")
+                        .font(.title3)
+                        .foregroundColor(.white)
+                }
+                .padding(.trailing, 12)
+            }
+            
+            // Point count
+            Text("\(formatCount(pointManager.uniqueCount)) pts")
+                .font(.system(.body, design: .monospaced))
+                .foregroundColor(.white)
+            
+            Spacer()
+            
+            // Reset button
+            if let onReset = onReset {
+                Button(action: onReset) {
+                    Text("Reset")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial)
+    }
+    
     // MARK: - Gestures
     
-    /// 1-finger drag: Orbit rotation
-    private var orbitGesture: some Gesture {
+    /// Drag: Orbit rotation
+    private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { value in
                 if let last = lastDragLocation {
@@ -90,49 +118,29 @@ struct PointRenderView: View {
             }
     }
     
-    /// Pinch: Zoom
-    private var zoomGesture: some Gesture {
-        MagnificationGesture()
+    /// Magnify: Zoom
+    private var magnifyGesture: some Gesture {
+        MagnifyGesture()
             .onChanged { value in
-                let scale = Float(value / lastScale)
+                let scale = Float(value.magnification / lastScale)
                 cameraDistance /= scale
-                cameraDistance = max(0.5, min(50, cameraDistance))
-                lastScale = value
+                cameraDistance = max(0.3, min(20, cameraDistance))
+                lastScale = value.magnification
             }
             .onEnded { _ in
                 lastScale = 1.0
             }
     }
     
-    /// 2-finger drag: Pan
-    private var panGesture: some Gesture {
-        DragGesture(minimumDistance: 1)
-            .simultaneously(with: DragGesture(minimumDistance: 1))
-            .onChanged { value in
-                guard let first = value.first?.location,
-                      let second = value.second?.location else { return }
-                
-                let center = CGPoint(
-                    x: (first.x + second.x) / 2,
-                    y: (first.y + second.y) / 2
-                )
-                
-                if let last = lastPanLocation {
-                    let dx = Float(center.x - last.x) * 0.005 * cameraDistance
-                    let dy = Float(center.y - last.y) * 0.005 * cameraDistance
-                    
-                    // Pan in view-aligned directions
-                    let right = SIMD3<Float>(cos(cameraAzimuth), 0, -sin(cameraAzimuth))
-                    let up = SIMD3<Float>(0, 1, 0)
-                    
-                    cameraTarget -= right * dx
-                    cameraTarget += up * dy
-                }
-                lastPanLocation = center
-            }
-            .onEnded { _ in
-                lastPanLocation = nil
-            }
+    // MARK: - Helpers
+    
+    private func formatCount(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.1fM", Double(count) / 1_000_000)
+        } else if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000)
+        }
+        return "\(count)"
     }
 }
 
@@ -183,10 +191,15 @@ struct PointCloudRealityView: View {
         let points = pointManager.points
         guard !points.isEmpty else { return }
         
+        guard #available(iOS 18.0, *) else {
+            print("LowLevelMesh requires iOS 18+")
+            return
+        }
+        
         do {
             let mesh = try createPointMesh(from: points)
             
-            // Create simple unlit material with vertex colors
+            // Use UnlitMaterial - vertex colors are applied via the mesh
             var material = UnlitMaterial()
             material.color = .init(tint: .white)
             
@@ -200,7 +213,7 @@ struct PointCloudRealityView: View {
     
     @available(iOS 18.0, *)
     private func createPointMesh(from points: [ColoredPoint]) throws -> MeshResource {
-        guard let device = MTLCreateSystemDefaultDevice() else {
+        guard let _ = MTLCreateSystemDefaultDevice() else {
             throw MeshError.noMetalDevice
         }
         
@@ -230,12 +243,12 @@ struct PointCloudRealityView: View {
         descriptor.vertexAttributes = attributes
         descriptor.vertexLayouts = [vertexLayout]
         descriptor.vertexCapacity = vertexCount
-        descriptor.indexCapacity = 0  // Points don't need indices
+        descriptor.indexCapacity = 0
         
         // Create mesh
         let mesh = try LowLevelMesh(descriptor: descriptor)
         
-        // Fill vertex buffer
+        // Fill vertex buffer with position and RGB color
         mesh.withUnsafeMutableBytes(bufferIndex: 0) { buffer in
             let vertices = buffer.bindMemory(to: PointVertex.self)
             for i in 0..<vertexCount {
@@ -279,6 +292,8 @@ struct PointCloudRealityView: View {
     }
 }
 
+// MARK: - Errors
+
 enum MeshError: Error {
     case noMetalDevice
 }
@@ -288,16 +303,23 @@ enum MeshError: Error {
 #Preview {
     let manager = PointManager()
     
-    // Add some test points
+    // Add test points with colors
     for i in 0..<1000 {
         let theta = Float(i) * 0.1
-        let r = Float(i) * 0.001
+        let r = Float(i) * 0.002
         let point = ColoredPoint(
-            position: SIMD3<Float>(r * cos(theta), Float(i) * 0.001, r * sin(theta)),
-            color: SIMD3<UInt8>(UInt8(i % 256), UInt8((i * 2) % 256), UInt8((i * 3) % 256))
+            position: SIMD3<Float>(r * cos(theta), Float(i) * 0.001 - 0.5, r * sin(theta)),
+            color: SIMD3<UInt8>(
+                UInt8(128 + Int(127 * cos(theta))),
+                UInt8(128 + Int(127 * sin(theta))),
+                UInt8(i % 256)
+            )
         )
         manager.addPoint(point)
     }
     
-    return PointRenderView(pointManager: manager)
+    return PointRenderView(
+        pointManager: manager,
+        onReset: { manager.clear() }
+    )
 }
