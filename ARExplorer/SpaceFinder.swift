@@ -6,7 +6,7 @@ enum SpaceFinder {
             .appendingPathComponent("Spaces", isDirectory: true)
     }
 
-    static func latestUSDZ() -> URL? {
+    static func latestPLY() -> URL? {
         let root = spacesRoot()
         guard FileManager.default.fileExists(atPath: root.path) else { return nil }
 
@@ -23,9 +23,9 @@ enum SpaceFinder {
         }
 
         for folder in sorted {
-            let usdz = folder.appendingPathComponent("scene.usdz")
-            if FileManager.default.fileExists(atPath: usdz.path) {
-                return usdz
+            let ply = folder.appendingPathComponent("scene.ply")
+            if FileManager.default.fileExists(atPath: ply.path) {
+                return ply
             }
         }
         return nil

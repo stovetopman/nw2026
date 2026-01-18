@@ -5,7 +5,7 @@ struct MemoryItem: Identifiable, Hashable {
     let title: String
     let date: Date
     let sizeBytes: Int
-    let usdzURL: URL
+    let plyURL: URL
     let folderURL: URL
     let previewURL: URL?
 

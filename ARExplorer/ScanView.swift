@@ -7,7 +7,7 @@ struct ScanView: View {
     var onOpenLatest: (MemoryItem) -> Void
 
     @State private var isRecording = false
-    @State private var scanMode: ScanMode = .mesh
+    @State private var scanMode: ScanMode = .point
 
     var body: some View {
         ZStack {

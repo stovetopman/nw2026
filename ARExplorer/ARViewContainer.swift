@@ -1,11 +1,9 @@
 import SwiftUI
 import RealityKit
 import ARKit
-import SceneKit
-import ModelIO
-import Metal
-import SceneKit.ModelIO
-import MetalKit
+import UIKit
+import simd
+import CoreVideo
 
 
 struct ARViewContainer: UIViewRepresentable {
@@ -16,26 +14,18 @@ struct ARViewContainer: UIViewRepresentable {
         var currentSpaceFolder: URL?
         var photoIndex: Int = 0
 
-        // Collect LiDAR mesh anchors for export
-        var meshAnchors: [UUID: ARMeshAnchor] = [:]
+        private var isScanning = false
+        
+        // Use the new LiDAR depth-based point cloud recorder
+        private let recorder = PointCloudRecorder()
 
         // MARK: - ARSessionDelegate
 
-        func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
-            for a in anchors {
-                if let m = a as? ARMeshAnchor {
-                    meshAnchors[m.identifier] = m
-                }
-            }
-        }
-
-        func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-            for a in anchors {
-                if let m = a as? ARMeshAnchor {
-                    meshAnchors[m.identifier] = m
-                }
-            }
+        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            guard isScanning else { return }
             
+            // Process frame with LiDAR depth map recorder
+            recorder.process(frame: frame)
         }
 
         // MARK: - Actions
@@ -43,13 +33,14 @@ struct ARViewContainer: UIViewRepresentable {
         func clearMap() {
             guard let arView else { return }
 
-            // Clear stored anchors used for export
-            meshAnchors.removeAll()
-
-            // Restart reconstruction so the mesh resets
+            // Configure AR session with LiDAR depth
             let config = ARWorldTrackingConfiguration()
             if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
                 config.sceneReconstruction = .mesh
+            }
+            // Enable scene depth for LiDAR point cloud capture
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                config.frameSemantics.insert(.sceneDepth)
             }
             config.environmentTexturing = .automatic
 
@@ -58,15 +49,21 @@ struct ARViewContainer: UIViewRepresentable {
                 options: [
                     .removeExistingAnchors,
                     .resetSceneReconstruction
-                    // add .resetTracking if you want a "hard" reset
                 ]
             )
 
-            // Optional: start a fresh folder/session
-            currentSpaceFolder = try? ScanStorage.makeNewSpaceFolder()
+            // Start a fresh folder/session
+            do {
+                currentSpaceFolder = try ScanStorage.makeNewSpaceFolder()
+                print("✅ Created space folder: \(currentSpaceFolder!.path)")
+            } catch {
+                print("❌ Failed to create space folder: \(error)")
+            }
             photoIndex = 0
+            isScanning = true
+            recorder.reset()
 
-            print("Cleared map / reset reconstruction")
+            print("✅ Started LiDAR scanning - move around to collect points")
         }
 
 
@@ -97,46 +94,42 @@ struct ARViewContainer: UIViewRepresentable {
             }
         }
 
-        func saveUSDZ() {
-            guard let folder = currentSpaceFolder else { return }
-            guard let device = MTLCreateSystemDefaultDevice() else {
-                print("No Metal device available.")
+        func savePLY() {
+            isScanning = false
+            guard let folder = currentSpaceFolder else {
+                print("ERROR: No space folder created. Did you start the scan?")
                 return
             }
 
-            // Debug: how much mesh data we have
-            print("meshAnchors:", meshAnchors.count)
-            var totalVerts = 0
-            var totalFaces = 0
-            for (_, a) in meshAnchors {
-                totalVerts += a.geometry.vertices.count
-                totalFaces += a.geometry.faces.count
-            }
-            print("totalVerts:", totalVerts, "totalFaces:", totalFaces)
-
-            if meshAnchors.isEmpty || totalVerts == 0 || totalFaces == 0 {
-                print("No mesh data yet. Walk around for 5–10 seconds and try again.")
+            print("Attempting to save PLY with \(recorder.pointCount) points")
+            
+            if recorder.pointCount == 0 {
+                print("No point cloud data yet. Walk around for a few seconds and try again.")
                 return
             }
 
-            let usdzURL = folder.appendingPathComponent("scene.usdz")
-
-            let asset = MDLAsset()
-            for (_, anchor) in meshAnchors {
-                let mdlMesh = anchor.toMDLMesh(device: device)
-                asset.add(mdlMesh)
-            }
-
-            let scnScene = SCNScene(mdlAsset: asset)
-
-            scnScene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil)
-
-            let attrs = try? FileManager.default.attributesOfItem(atPath: usdzURL.path)
-            let size = (attrs?[.size] as? NSNumber)?.intValue ?? -1
-            print("Saved USDZ to \(usdzURL)")
-            print("USDZ bytes:", size)
-            if FileManager.default.fileExists(atPath: usdzURL.path) {
-                NotificationCenter.default.post(name: .scanSaved, object: usdzURL)
+            // Save using the LiDAR recorder
+            recorder.savePLY { url in
+                guard let url = url else {
+                    print("❌ Failed to save PLY")
+                    return
+                }
+                
+                // Also save a copy to the space folder
+                let plyURL = folder.appendingPathComponent("scene.ply")
+                do {
+                    if FileManager.default.fileExists(atPath: plyURL.path) {
+                        try FileManager.default.removeItem(at: plyURL)
+                    }
+                    try FileManager.default.copyItem(at: url, to: plyURL)
+                    print("✅ Copied PLY to space folder: \(plyURL.path)")
+                    
+                    NotificationCenter.default.post(name: .scanSaved, object: plyURL)
+                } catch {
+                    print("❌ Failed to copy PLY to space folder: \(error)")
+                    // Still notify with the original URL
+                    NotificationCenter.default.post(name: .scanSaved, object: url)
+                }
             }
         }
     }
@@ -148,13 +141,17 @@ struct ARViewContainer: UIViewRepresentable {
         context.coordinator.arView = arView
         arView.session.delegate = context.coordinator
 
-        // Helpful while scanning
+        // Show mesh overlay for visual feedback during scanning
         arView.debugOptions = [.showSceneUnderstanding]
 
-        // AR config (LiDAR mesh)
+        // AR config with LiDAR depth
         let config = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
             config.sceneReconstruction = .mesh
+        }
+        // Enable scene depth for LiDAR point cloud capture
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
         }
         config.environmentTexturing = .automatic
         arView.session.run(config)
@@ -163,7 +160,7 @@ struct ARViewContainer: UIViewRepresentable {
             context.coordinator.capturePhoto()
         }
         NotificationCenter.default.addObserver(forName: .saveScan, object: nil, queue: .main) { _ in
-            context.coordinator.saveUSDZ()
+            context.coordinator.savePLY()
         }
         NotificationCenter.default.addObserver(forName: .clearMap, object: nil, queue: .main) { _ in
             context.coordinator.clearMap()
@@ -172,38 +169,8 @@ struct ARViewContainer: UIViewRepresentable {
             context.coordinator.clearMap()
         }
 
-
         return arView
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {}
-}
-
-// MARK: - Robust ARMeshAnchor -> MDLMesh conversion (handles vertices.offset; rebuilds indices)
-
-extension ARMeshAnchor {
-
-    private func readTriangleIndices(faces: ARGeometryElement) -> (indicesU16: [UInt16]?, indicesU32: [UInt32]?) {
-        let triCount = faces.count
-        let bpi = faces.bytesPerIndex
-        let ptr = faces.buffer.contents()
-
-        if bpi == 2 {
-            var out: [UInt16] = []
-            out.reserveCapacity(triCount * 3)
-            for i in 0..<(triCount * 3) {
-                let v = ptr.load(fromByteOffset: i * 2, as: UInt16.self)
-                out.append(v)
-            }
-            return (out, nil)
-        } else {
-            var out: [UInt32] = []
-            out.reserveCapacity(triCount * 3)
-            for i in 0..<(triCount * 3) {
-                let v = ptr.load(fromByteOffset: i * 4, as: UInt32.self)
-                out.append(v)
-            }
-            return (nil, out)
-        }
-    }
 }

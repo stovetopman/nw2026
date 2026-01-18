@@ -9,7 +9,7 @@ struct MemoryViewerView: View {
 
     var body: some View {
         ZStack {
-            ViewerView(usdzURL: item.usdzURL)
+            ViewerView(plyURL: item.plyURL)
                 .ignoresSafeArea()
 
             VStack {
@@ -30,7 +30,7 @@ struct MemoryViewerView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("1.2M Points")
+                            Text("POINT CLOUD")
                                 .font(AppTheme.titleFont(size: 12))
                                 .foregroundColor(AppTheme.ink)
                                 .padding(.horizontal, 12)
@@ -44,7 +44,7 @@ struct MemoryViewerView: View {
                                         )
                                 )
 
-                            Text("LiDAR Mesh")
+                            Text("PLY COLORS")
                                 .font(AppTheme.titleFont(size: 12))
                                 .foregroundColor(AppTheme.ink)
                                 .padding(.horizontal, 12)
@@ -140,7 +140,7 @@ struct MemoryViewerView: View {
             .padding(.top, 16)
         }
         .sheet(isPresented: $showShare) {
-            ShareSheet(items: [item.usdzURL])
+            ShareSheet(items: [item.plyURL])
         }
     }
 

@@ -22,6 +22,42 @@ enum ScanStorage {
         return folder
     }
 
+    static func exportPLY(from sourceURL: URL, spaceID: String) throws -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        
+        // Use a timestamp-based name for easier identification
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let timestamp = dateFormatter.string(from: Date())
+        let fileName = "PointCloud_\(timestamp).ply"
+        
+        let destinationURL = docs.appendingPathComponent(fileName)
+        
+        // Read source file data
+        let sourceData = try Data(contentsOf: sourceURL)
+        
+        // Write directly to destination
+        try sourceData.write(to: destinationURL, options: [.atomic])
+        
+        // Verify the file was created and log
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: destinationURL.path)
+            let size = (attrs?[.size] as? Int) ?? 0
+            print("✅ PLY exported successfully:")
+            print("   Path: \(destinationURL.path)")
+            print("   Size: \(size) bytes")
+            
+            // List all files in Documents to verify
+            let contents = try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil)
+            print("📂 Documents folder contents:")
+            for file in contents ?? [] {
+                print("   - \(file.lastPathComponent)")
+            }
+        }
+        
+        return destinationURL
+    }
+
     static func saveJPEG(from pixelBuffer: CVPixelBuffer, to url: URL) throws {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         let context = CIContext()

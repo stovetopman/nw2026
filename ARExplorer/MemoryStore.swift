@@ -36,10 +36,10 @@ final class MemoryStore: ObservableObject {
         )) ?? []
 
         let items: [MemoryItem] = folders.compactMap { folder in
-            let usdzURL = folder.appendingPathComponent("scene.usdz")
-            guard FileManager.default.fileExists(atPath: usdzURL.path) else { return nil }
+            let plyURL = folder.appendingPathComponent("scene.ply")
+            guard FileManager.default.fileExists(atPath: plyURL.path) else { return nil }
 
-            let values = try? usdzURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let values = try? plyURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
             let date = values?.contentModificationDate ?? Date()
             let size = values?.fileSize ?? 0
             let title = loadTitle(in: folder, date: date)
@@ -51,7 +51,7 @@ final class MemoryStore: ObservableObject {
                 title: title,
                 date: date,
                 sizeBytes: size,
-                usdzURL: usdzURL,
+                plyURL: plyURL,
                 folderURL: folder,
                 previewURL: previewURL
             )
