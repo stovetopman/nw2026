@@ -31,6 +31,17 @@ final class MemoryStore: ObservableObject {
         }
     }
 
+    func deleteMemories(_ items: [MemoryItem]) {
+        for item in items {
+            do {
+                try FileManager.default.removeItem(at: item.folderURL)
+            } catch {
+                print("❌ Failed to delete memory: \(error)")
+            }
+        }
+        refresh()
+    }
+
     func refresh() {
         let root = SpaceFinder.spacesRoot()
         if !FileManager.default.fileExists(atPath: root.path) {

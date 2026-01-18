@@ -3,6 +3,8 @@ import SwiftUI
 struct MemoryCardView: View {
     let item: MemoryItem
     var isCompact: Bool = false
+    var isSelectionMode: Bool = false
+    var isSelected: Bool = false
     var onGoToFile: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var onShare: (() -> Void)? = nil
@@ -50,32 +52,55 @@ struct MemoryCardView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22)
-                .stroke(AppTheme.ink, lineWidth: 2)
+                .stroke(isSelected ? AppTheme.accentBlue : AppTheme.ink, lineWidth: isSelected ? 3 : 2)
+        )
+        .overlay(
+            // Selection indicator
+            Group {
+                if isSelectionMode {
+                    Circle()
+                        .fill(isSelected ? AppTheme.accentBlue : Color.white)
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.ink, lineWidth: 2)
+                        )
+                        .overlay(
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(isSelected ? .white : .clear)
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(16)
+                }
+            }
         )
         .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 6)
-        .contextMenu {
-            if let onShare = onShare {
-                Button {
-                    onShare()
-                } label: {
-                    Label("Share", systemImage: "square.and.arrow.up")
+        .if(!isSelectionMode) { view in
+            view.contextMenu {
+                if let onShare = onShare {
+                    Button {
+                        onShare()
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
                 }
-            }
-            
-            if let onGoToFile = onGoToFile {
-                Button {
-                    onGoToFile()
-                } label: {
-                    Label("Go to File", systemImage: "folder")
+                
+                if let onGoToFile = onGoToFile {
+                    Button {
+                        onGoToFile()
+                    } label: {
+                        Label("Go to File", systemImage: "folder")
+                    }
                 }
-            }
-            
-            if let onDelete = onDelete {
-                Divider()
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Label("Delete Memory", systemImage: "trash")
+                
+                if let onDelete = onDelete {
+                    Divider()
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Label("Delete Memory", systemImage: "trash")
+                    }
                 }
             }
         }
@@ -95,5 +120,17 @@ struct MemoryCardView: View {
                 .font(.system(size: 30, weight: .bold))
                 .foregroundColor(AppTheme.ink.opacity(0.5))
         )
+    }
+}
+
+// MARK: - Conditional View Modifier
+extension View {
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
     }
 }

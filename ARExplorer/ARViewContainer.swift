@@ -231,6 +231,10 @@ struct ARViewContainer: UIViewRepresentable {
         }
         NotificationCenter.default.addObserver(forName: .startScan, object: nil, queue: .main) { _ in
             context.coordinator.clearMap()
+            // Capture initial thumbnail photo after a brief delay to ensure AR is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                context.coordinator.capturePhoto()
+            }
         }
         NotificationCenter.default.addObserver(forName: .requestCameraPosition, object: nil, queue: .main) { _ in
             if let position = context.coordinator.getCrosshairWorldPosition() {

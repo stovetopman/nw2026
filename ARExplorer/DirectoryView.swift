@@ -6,6 +6,8 @@ struct DirectoryView: View {
     var onStartScan: () -> Void
 
     @State private var selectedFilter: DirectoryFilter = .all
+    @State private var isSelectionMode: Bool = false
+    @State private var selectedMemories: Set<UUID> = []
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -35,47 +37,96 @@ struct DirectoryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("DIRECTORY")
-                    .font(AppTheme.bodyFont(size: 12))
-                    .foregroundColor(AppTheme.softInk)
-                Spacer()
-                HStack(spacing: 10) {
-                    Button(action: {}) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 16, weight: .bold))
+                if isSelectionMode {
+                    Button(action: {
+                        withAnimation {
+                            selectedMemories.removeAll()
+                            isSelectionMode = false
+                        }
+                    }) {
+                        Text("Cancel")
+                            .font(AppTheme.titleFont(size: 14))
                             .foregroundColor(AppTheme.ink)
+                    }
+                    Spacer()
+                    Text("\(selectedMemories.count) selected")
+                        .font(AppTheme.titleFont(size: 14))
+                        .foregroundColor(AppTheme.ink)
+                    Spacer()
+                    Button(action: deleteSelectedMemories) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
                             .frame(width: 40, height: 40)
                             .background(
                                 RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color.white)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(AppTheme.ink, lineWidth: 2)
-                                    )
+                                    .fill(selectedMemories.isEmpty ? Color.gray : Color.red)
                             )
                     }
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [AppTheme.accentPink, AppTheme.accentBlue],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+                    .disabled(selectedMemories.isEmpty)
+                } else {
+                    Text("DIRECTORY")
+                        .font(AppTheme.bodyFont(size: 12))
+                        .foregroundColor(AppTheme.softInk)
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Button(action: {
+                            withAnimation {
+                                isSelectionMode = true
+                            }
+                        }) {
+                            Image(systemName: "checkmark.circle")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(AppTheme.ink)
+                                .frame(width: 40, height: 40)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(Color.white)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(AppTheme.ink, lineWidth: 2)
+                                        )
+                                )
+                        }
+                        Button(action: {}) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(AppTheme.ink)
+                                .frame(width: 40, height: 40)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(Color.white)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(AppTheme.ink, lineWidth: 2)
+                                        )
+                                )
+                        }
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [AppTheme.accentPink, AppTheme.accentBlue],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
                             )
-                        )
-                        .frame(width: 40, height: 40)
-                        .overlay(
-                            Image(systemName: "person.fill")
-                                .foregroundColor(.white)
-                        )
-                        .overlay(
-                            Circle().stroke(AppTheme.ink, lineWidth: 2)
-                        )
+                            .frame(width: 40, height: 40)
+                            .overlay(
+                                Image(systemName: "person.fill")
+                                    .foregroundColor(.white)
+                            )
+                            .overlay(
+                                Circle().stroke(AppTheme.ink, lineWidth: 2)
+                            )
+                    }
                 }
             }
 
-            Text("MY\nMEMORIES")
-                .font(AppTheme.displayFont(size: 30))
-                .foregroundColor(AppTheme.ink)
+            if !isSelectionMode {
+                Text("MY\nMEMORIES")
+                    .font(AppTheme.displayFont(size: 30))
+                    .foregroundColor(AppTheme.ink)
+            }
         }
     }
 
@@ -110,10 +161,16 @@ struct DirectoryView: View {
         LazyVGrid(columns: columns, spacing: 16) {
             ForEach(store.memories) { item in
                 Button {
-                    onOpenMemory(item)
+                    if isSelectionMode {
+                        toggleSelection(item)
+                    } else {
+                        onOpenMemory(item)
+                    }
                 } label: {
                     MemoryCardView(
                         item: item,
+                        isSelectionMode: isSelectionMode,
+                        isSelected: selectedMemories.contains(item.id),
                         onGoToFile: { openInFilesApp(item: item) },
                         onDelete: { store.deleteMemory(item) }
                     )
@@ -121,7 +178,8 @@ struct DirectoryView: View {
                 .buttonStyle(.plain)
             }
 
-            Button(action: onStartScan) {
+            if !isSelectionMode {
+                Button(action: onStartScan) {
                 VStack(spacing: 12) {
                     Circle()
                         .fill(Color.white)
@@ -152,6 +210,29 @@ struct DirectoryView: View {
                 )
             }
             .buttonStyle(.plain)
+            }
+        }
+    }
+    
+    private func toggleSelection(_ item: MemoryItem) {
+        if selectedMemories.contains(item.id) {
+            selectedMemories.remove(item.id)
+            if selectedMemories.isEmpty {
+                withAnimation {
+                    isSelectionMode = false
+                }
+            }
+        } else {
+            selectedMemories.insert(item.id)
+        }
+    }
+    
+    private func deleteSelectedMemories() {
+        let itemsToDelete = store.memories.filter { selectedMemories.contains($0.id) }
+        store.deleteMemories(itemsToDelete)
+        withAnimation {
+            selectedMemories.removeAll()
+            isSelectionMode = false
         }
     }
     

@@ -64,7 +64,8 @@ enum ScanStorage {
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
             throw NSError(domain: "ScanStorage", code: 1)
         }
-        let uiImage = UIImage(cgImage: cgImage)
+        // Apply correct orientation - ARKit camera feed is rotated 90° CW, so we correct with .right
+        let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
 
         guard let data = uiImage.jpegData(compressionQuality: 0.9) else {
             throw NSError(domain: "ScanStorage", code: 2)
