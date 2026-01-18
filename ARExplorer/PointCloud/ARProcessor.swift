@@ -227,14 +227,26 @@ extension ARProcessor {
         let cb = cbcrPtr.pointee
         let cr = cbcrPtr.advanced(by: 1).pointee
         
-        // Convert YCbCr to RGB
-        let yf = Float(yValue)
-        let cbf = Float(cb) - 128
-        let crf = Float(cr) - 128
+        // Convert YCbCr to RGB (BT.601 full range for better color accuracy)
+        let yf = Float(yValue) - 16.0
+        let cbf = Float(cb) - 128.0
+        let crf = Float(cr) - 128.0
         
-        let r = UInt8(clamping: Int(yf + 1.402 * crf))
-        let g = UInt8(clamping: Int(yf - 0.344 * cbf - 0.714 * crf))
-        let b = UInt8(clamping: Int(yf + 1.772 * cbf))
+        // BT.601 coefficients with slight saturation boost
+        var rf = 1.164 * yf + 1.596 * crf
+        var gf = 1.164 * yf - 0.392 * cbf - 0.813 * crf
+        var bf = 1.164 * yf + 2.017 * cbf
+        
+        // Slight saturation boost for more vivid colors
+        let gray = 0.299 * rf + 0.587 * gf + 0.114 * bf
+        let saturationBoost: Float = 1.15
+        rf = gray + (rf - gray) * saturationBoost
+        gf = gray + (gf - gray) * saturationBoost
+        bf = gray + (bf - gray) * saturationBoost
+        
+        let r = UInt8(clamping: Int(max(0, min(255, rf))))
+        let g = UInt8(clamping: Int(max(0, min(255, gf))))
+        let b = UInt8(clamping: Int(max(0, min(255, bf))))
         
         return SIMD3<UInt8>(r, g, b)
     }

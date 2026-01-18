@@ -2,60 +2,32 @@
 //  PointRenderView.swift
 //  ARExplorer
 //
-//  RealityKit point cloud renderer using LowLevelMesh with .point topology.
-//  Renders full RGB color from captured camera image.
+//  SceneKit point cloud renderer with orbit/zoom gestures.
+//  Uses SCNGeometryPrimitiveType.point for efficient point rendering.
 //
 
 import SwiftUI
-import RealityKit
-import Metal
+import SceneKit
 import simd
-
-// MARK: - Point Vertex Layout
-
-/// Vertex layout for point cloud: position + color
-struct PointVertex {
-    var position: SIMD3<Float>
-    var color: SIMD3<Float>  // RGB normalized 0-1
-}
 
 // MARK: - Point Render View
 
-/// Renders point cloud using RealityKit LowLevelMesh with full RGB colors.
+/// Renders point cloud using SceneKit with full RGB colors.
 struct PointRenderView: View {
     
     @ObservedObject var pointManager: PointManager
     var onReset: (() -> Void)? = nil
     var onBack: (() -> Void)? = nil
     
-    // Camera state
-    @State private var cameraDistance: Float = 3.0
-    @State private var cameraAzimuth: Float = 0.0
-    @State private var cameraElevation: Float = 0.3
-    @State private var cameraTarget: SIMD3<Float> = .zero
-    
-    // Gesture state
-    @State private var lastDragLocation: CGPoint?
-    @State private var lastScale: CGFloat = 1.0
-    
     var body: some View {
         ZStack {
             // Full-screen point cloud view
-            PointCloudRealityView(
-                pointManager: pointManager,
-                cameraDistance: cameraDistance,
-                cameraAzimuth: cameraAzimuth,
-                cameraElevation: cameraElevation,
-                cameraTarget: cameraTarget
-            )
-            .gesture(dragGesture)
-            .gesture(magnifyGesture)
-            .ignoresSafeArea()
+            PointCloudSceneView(pointManager: pointManager)
+                .ignoresSafeArea()
             
             // Minimal footer at bottom
             VStack {
                 Spacer()
-                
                 footerBar
             }
         }
@@ -97,43 +69,6 @@ struct PointRenderView: View {
         .background(.ultraThinMaterial)
     }
     
-    // MARK: - Gestures
-    
-    /// Drag: Orbit rotation
-    private var dragGesture: some Gesture {
-        DragGesture(minimumDistance: 1)
-            .onChanged { value in
-                if let last = lastDragLocation {
-                    let dx = Float(value.location.x - last.x)
-                    let dy = Float(value.location.y - last.y)
-                    
-                    cameraAzimuth -= dx * 0.01
-                    cameraElevation += dy * 0.01
-                    cameraElevation = max(-Float.pi/2 + 0.1, min(Float.pi/2 - 0.1, cameraElevation))
-                }
-                lastDragLocation = value.location
-            }
-            .onEnded { _ in
-                lastDragLocation = nil
-            }
-    }
-    
-    /// Magnify: Zoom
-    private var magnifyGesture: some Gesture {
-        MagnifyGesture()
-            .onChanged { value in
-                let scale = Float(value.magnification / lastScale)
-                cameraDistance /= scale
-                cameraDistance = max(0.3, min(20, cameraDistance))
-                lastScale = value.magnification
-            }
-            .onEnded { _ in
-                lastScale = 1.0
-            }
-    }
-    
-    // MARK: - Helpers
-    
     private func formatCount(_ count: Int) -> String {
         if count >= 1_000_000 {
             return String(format: "%.1fM", Double(count) / 1_000_000)
@@ -144,158 +79,125 @@ struct PointRenderView: View {
     }
 }
 
-// MARK: - RealityKit View
+// MARK: - SceneKit View
 
-struct PointCloudRealityView: View {
+struct PointCloudSceneView: UIViewRepresentable {
     
     @ObservedObject var pointManager: PointManager
     
-    let cameraDistance: Float
-    let cameraAzimuth: Float
-    let cameraElevation: Float
-    let cameraTarget: SIMD3<Float>
-    
-    var body: some View {
-        RealityView { content in
-            // Create camera
-            let camera = PerspectiveCamera()
-            camera.camera.fieldOfViewInDegrees = 60
-            content.add(camera)
-            
-            // Create point cloud entity
-            let pointEntity = Entity()
-            pointEntity.name = "PointCloud"
-            content.add(pointEntity)
-            
-        } update: { content in
-            // Update camera position
-            if let camera = content.entities.first(where: { $0 is PerspectiveCamera }) as? PerspectiveCamera {
-                let x = cameraDistance * cos(cameraElevation) * sin(cameraAzimuth)
-                let y = cameraDistance * sin(cameraElevation)
-                let z = cameraDistance * cos(cameraElevation) * cos(cameraAzimuth)
-                
-                let cameraPos = cameraTarget + SIMD3<Float>(x, y, z)
-                camera.position = cameraPos
-                camera.look(at: cameraTarget, from: cameraPos, relativeTo: nil)
-            }
-            
-            // Update point cloud mesh
-            if let pointEntity = content.entities.first(where: { $0.name == "PointCloud" }) {
-                updatePointCloudMesh(entity: pointEntity)
-            }
-        }
-        .background(Color.black)
+    func makeUIView(context: Context) -> SCNView {
+        let scnView = SCNView()
+        scnView.backgroundColor = .black
+        scnView.allowsCameraControl = true  // Built-in orbit, pan, zoom
+        scnView.autoenablesDefaultLighting = false
+        
+        // Create scene
+        let scene = SCNScene()
+        scnView.scene = scene
+        
+        // Add camera
+        let cameraNode = SCNNode()
+        cameraNode.camera = SCNCamera()
+        cameraNode.camera?.zNear = 0.01
+        cameraNode.camera?.zFar = 100
+        cameraNode.position = SCNVector3(0, 0, 3)
+        scene.rootNode.addChildNode(cameraNode)
+        
+        // Add point cloud node
+        let pointCloudNode = SCNNode()
+        pointCloudNode.name = "PointCloud"
+        scene.rootNode.addChildNode(pointCloudNode)
+        
+        // Initial update
+        updatePointCloud(node: pointCloudNode, points: pointManager.points)
+        
+        return scnView
     }
     
-    private func updatePointCloudMesh(entity: Entity) {
-        let points = pointManager.points
-        guard !points.isEmpty else { return }
-        
-        guard #available(iOS 18.0, *) else {
-            print("LowLevelMesh requires iOS 18+")
+    func updateUIView(_ uiView: SCNView, context: Context) {
+        guard let scene = uiView.scene,
+              let pointCloudNode = scene.rootNode.childNode(withName: "PointCloud", recursively: false) else {
             return
         }
         
-        do {
-            let mesh = try createPointMesh(from: points)
-            
-            // Use UnlitMaterial - vertex colors are applied via the mesh
-            var material = UnlitMaterial()
-            material.color = .init(tint: .white)
-            
-            let modelComponent = ModelComponent(mesh: mesh, materials: [material])
-            entity.components.set(modelComponent)
-            
-        } catch {
-            print("Failed to create point mesh: \(error)")
-        }
+        updatePointCloud(node: pointCloudNode, points: pointManager.points)
     }
     
-    @available(iOS 18.0, *)
-    private func createPointMesh(from points: [ColoredPoint]) throws -> MeshResource {
-        guard let _ = MTLCreateSystemDefaultDevice() else {
-            throw MeshError.noMetalDevice
-        }
+    private func updatePointCloud(node: SCNNode, points: [ColoredPoint]) {
+        // Remove existing geometry
+        node.geometry = nil
         
-        let vertexCount = points.count
+        guard !points.isEmpty else { return }
         
-        // Define vertex attributes: position + color
-        var attributes: [LowLevelMesh.Attribute] = []
-        attributes.append(LowLevelMesh.Attribute(
-            semantic: .position,
-            format: .float3,
-            offset: 0
-        ))
-        attributes.append(LowLevelMesh.Attribute(
-            semantic: .color,
-            format: .float3,
-            offset: MemoryLayout<SIMD3<Float>>.stride
-        ))
-        
-        // Vertex layout
-        let vertexLayout = LowLevelMesh.Layout(
-            bufferIndex: 0,
-            bufferStride: MemoryLayout<PointVertex>.stride
-        )
-        
-        // Create mesh descriptor
-        var descriptor = LowLevelMesh.Descriptor()
-        descriptor.vertexAttributes = attributes
-        descriptor.vertexLayouts = [vertexLayout]
-        descriptor.vertexCapacity = vertexCount
-        descriptor.indexCapacity = 0
-        
-        // Create mesh
-        let mesh = try LowLevelMesh(descriptor: descriptor)
-        
-        // Fill vertex buffer with position and RGB color
-        mesh.withUnsafeMutableBytes(bufferIndex: 0) { buffer in
-            let vertices = buffer.bindMemory(to: PointVertex.self)
-            for i in 0..<vertexCount {
-                let point = points[i]
-                vertices[i] = PointVertex(
-                    position: point.position,
-                    color: SIMD3<Float>(
-                        Float(point.color.x) / 255.0,
-                        Float(point.color.y) / 255.0,
-                        Float(point.color.z) / 255.0
-                    )
-                )
-            }
-        }
-        
-        // Create part with point topology
-        let part = LowLevelMesh.Part(
-            indexCount: vertexCount,
-            topology: .point,
-            bounds: computeBounds(points: points)
-        )
-        mesh.parts.replaceAll([part])
-        
-        return try MeshResource(from: mesh)
+        // Create geometry from points
+        node.geometry = createPointGeometry(from: points)
     }
     
-    private func computeBounds(points: [ColoredPoint]) -> BoundingBox {
-        guard let first = points.first else {
-            return BoundingBox(min: .zero, max: .zero)
-        }
+    private func createPointGeometry(from points: [ColoredPoint]) -> SCNGeometry {
+        // Vertex positions
+        var vertices: [SCNVector3] = []
+        vertices.reserveCapacity(points.count)
         
-        var minP = first.position
-        var maxP = first.position
+        // Vertex colors
+        var colors: [SCNVector3] = []
+        colors.reserveCapacity(points.count)
+        
+        // Center calculation for better viewing
+        var center = SIMD3<Float>.zero
         
         for point in points {
-            minP = min(minP, point.position)
-            maxP = max(maxP, point.position)
+            vertices.append(SCNVector3(point.position.x, point.position.y, point.position.z))
+            colors.append(SCNVector3(
+                Float(point.color.x) / 255.0,
+                Float(point.color.y) / 255.0,
+                Float(point.color.z) / 255.0
+            ))
+            center += point.position
         }
         
-        return BoundingBox(min: minP, max: maxP)
+        if !points.isEmpty {
+            center /= Float(points.count)
+        }
+        
+        // Create geometry sources
+        let vertexSource = SCNGeometrySource(vertices: vertices)
+        let colorSource = SCNGeometrySource(
+            data: Data(bytes: colors, count: colors.count * MemoryLayout<SCNVector3>.stride),
+            semantic: .color,
+            vectorCount: colors.count,
+            usesFloatComponents: true,
+            componentsPerVector: 3,
+            bytesPerComponent: MemoryLayout<Float>.size,
+            dataOffset: 0,
+            dataStride: MemoryLayout<SCNVector3>.stride
+        )
+        
+        // Create point element (no indices needed for points)
+        let indices = Array(0..<Int32(points.count))
+        let indexData = Data(bytes: indices, count: indices.count * MemoryLayout<Int32>.size)
+        let element = SCNGeometryElement(
+            data: indexData,
+            primitiveType: .point,
+            primitiveCount: points.count,
+            bytesPerIndex: MemoryLayout<Int32>.size
+        )
+        
+        // Set point size - small for crisp detail
+        element.pointSize = 2.0
+        element.minimumPointScreenSpaceRadius = 1.0
+        element.maximumPointScreenSpaceRadius = 4.0
+        
+        // Create geometry
+        let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
+        
+        // Use unlit material to show vertex colors directly
+        let material = SCNMaterial()
+        material.lightingModel = .constant  // Unlit - shows vertex colors as-is
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        
+        return geometry
     }
-}
-
-// MARK: - Errors
-
-enum MeshError: Error {
-    case noMetalDevice
 }
 
 // MARK: - Preview
